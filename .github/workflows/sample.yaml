@@ -14,13 +14,12 @@ on:
 jobs:
   sample-action:
     name: Sample action
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     if: ${{ inputs.enable-code-scans }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
-        with:
-          fetch-depth: '0'
+
       - name: Run sample action
         with:
           ghcr-token: ${{ secrets.ghcr-token }}
