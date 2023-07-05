@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       number-of-services:
-        required: true
+        required: false
         type: number
       cmd:
         required: true
@@ -30,8 +30,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v1
+
+    - name: Set up Ruby
+      uses: ruby/setup-ruby@v1
+
     - name: setup
       run: |
+        expected_services=$(ruby -e "require 'yaml'; print YAML.load_file('docker-compose.test.yml')['services'].count")
+        echo "expected_services: $expected_services"
+
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
         docker-compose -f docker-compose.test.yml pull
         docker-compose -f docker-compose.test.yml up -d
@@ -56,7 +63,7 @@ jobs:
 
         # check if all services are running
         RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
-        if [ "$RUNNING" != ${{ inputs.number-of-services}}]; then echo "not all services are running"; docker-compose -f docker-compose.test.yml logs; exit 1; fi
+        if [ "$RUNNING" != "$expected_services"]; then echo "not all services are running"; docker-compose -f docker-compose.test.yml logs; exit 1; fi
 
         # check if the app is healty
         STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q ${{ inputs.application-name }} ))
