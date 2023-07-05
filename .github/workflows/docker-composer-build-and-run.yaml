@@ -6,6 +6,9 @@ on:
       application-name:
         required: true
         type: string
+      tag:
+        required: true
+        type: string
       number-of-services:
         required: true
         type: number
@@ -17,6 +20,8 @@ on:
         required: true
       dockerhub_pass:
         required: true
+env:
+  TAG: ${{ inputs.tag }}
 
 jobs:
   build_and_push:
