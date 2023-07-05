@@ -42,7 +42,7 @@ jobs:
     - name: Set up services and databases
       run: |
         echo "preparing database ..."
-        docker-compose -f docker-compose.test.yml exec -T {{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
+        docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
         sleep 5
 
         # wait for all services to be started
@@ -64,11 +64,11 @@ jobs:
 
         # check if all services are running
         RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
-        if [ "$RUNNING" != {{ inputs.number-of-services}}]; then echo "not all services are running"; docker-compose -f docker-compose.test.yml logs; exit 1; fi
+        if [ "$RUNNING" != ${{ inputs.number-of-services}}]; then echo "not all services are running"; docker-compose -f docker-compose.test.yml logs; exit 1; fi
 
         # check if the app is healthy
         STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q reaktor))
-        if [ "$STATUS" != "healthy" ]; then echo "{{ inputs.application-name }} is not healthy"; docker-compose -f docker-compose.test.yml ps; exit 1; fi
+        if [ "$STATUS" != "healthy" ]; then echo "${{ inputs.application-name }} is not healthy"; docker-compose -f docker-compose.test.yml ps; exit 1; fi
 
     - name: Push Docker image to Docker Hub
-      run: docker-compose -f docker-compose.test.yml push {{ inputs.application-name}}
+      run: docker-compose -f docker-compose.test.yml push ${{ inputs.application-name}}
