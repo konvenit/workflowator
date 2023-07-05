@@ -65,3 +65,7 @@ jobs:
     - name: Run command
       run: |
         docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} ${{ inputs.cmd}}
+
+    - name: Stop containers
+      if: always()
+      run: docker-compose -f docker-compose.test.yml down

@@ -72,3 +72,7 @@ jobs:
 
     - name: Push Docker image to Docker Hub
       run: docker-compose -f docker-compose.test.yml push ${{ inputs.application-name}}
+
+    - name: Stop containers
+      if: always()
+      run: docker-compose -f docker-compose.test.yml down
