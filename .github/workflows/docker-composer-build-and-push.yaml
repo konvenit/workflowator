@@ -1,0 +1,68 @@
+name: docker compose build and push to docker hub
+
+on:
+  workflow_call:
+    inputs:
+      application-name:
+        required: true
+        type: string
+      number-of-services:
+        required: true
+        type: number
+    secrets:
+      dockerhub_user:
+        required: true
+      dockerhub_pass:
+        required: true
+
+jobs:
+  build_and_push:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v1
+
+    - name: Log in to Docker Hub
+      run: |
+        docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
+
+    - name: Pull Docker Compose test dependencies
+      run: docker-compose -f docker-compose.test.yml pull
+
+    - name: Build Docker image
+      run: docker-compose -f docker-compose.test.yml up -d
+
+    - name: Set up services and databases
+      run: |
+        echo "preparing database ..."
+        docker-compose -f docker-compose.test.yml exec -T {{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
+        sleep 5
+
+        # wait for all services to be started
+        echo "wait for all services to be started"
+        while :
+        do
+        SERVICES=$(docker-compose -f docker-compose.test.yml ps)
+        if echo $SERVICES | grep '(health: starting)' >> /dev/null; then
+            echo "waiting for services to start ..."
+            echo
+            echo "$SERVICES" | grep '(health: starting)'
+            sleep 2
+        else
+            echo "services started"
+            echo "$SERVICES"
+            break
+        fi
+        done
+
+        # check if all services are running
+        RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
+        if [ "$RUNNING" != {{ inputs.number-of-services}}]; then echo "not all services are running"; docker-compose -f docker-compose.test.yml logs; exit 1; fi
+
+        # check if the app is healthy
+        STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q reaktor))
+        if [ "$STATUS" != "healthy" ]; then echo "{{ inputs.application-name }} is not healthy"; docker-compose -f docker-compose.test.yml ps; exit 1; fi
+
+    - name: Push Docker image to Docker Hub
+      run: docker-compose -f docker-compose.test.yml push {{ inputs.application-name}}
