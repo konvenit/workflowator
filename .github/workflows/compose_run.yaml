@@ -9,9 +9,9 @@ on:
       tag:
         required: true
         type: string
-      number-of-services:
+      screenshot-patch:
         required: false
-        type: number
+        type: string
       cmd:
         required: true
         type: string
@@ -72,6 +72,13 @@ jobs:
     - name: Run command
       run: |
         docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} ${{ inputs.cmd}}
+
+    - name: Create Artifact
+      if: inputs.screenshot-patch != ''
+      uses: actions/upload-artifact@v3
+      with:
+        name: screenshots
+        path: ${{ inputs.screenshot-patch }
 
     - name: Stop containers
       if: always()
