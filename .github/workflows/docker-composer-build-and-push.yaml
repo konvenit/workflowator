@@ -73,7 +73,7 @@ jobs:
         if [ "$RUNNING" != "$expected_services"]; then echo "not all services are running"; docker-compose -f docker-compose.test.yml logs; exit 1; fi
 
         # check if the app is healthy
-        STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q reaktor))
+        STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q ${{ inputs.application-name}}))
         if [ "$STATUS" != "healthy" ]; then echo "${{ inputs.application-name }} is not healthy"; docker-compose -f docker-compose.test.yml ps; exit 1; fi
 
     - name: Push Docker image to Docker Hub
