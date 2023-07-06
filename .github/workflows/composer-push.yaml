@@ -22,7 +22,7 @@ env:
   TAG: ${{ inputs.tag }}
 
 jobs:
-  docker_compose_build_and_push:
+  compose_push:
     runs-on: ubuntu-22.04
 
     steps:
