@@ -9,6 +9,9 @@ on:
       tag:
         required: true
         type: string
+      screenshot-patch:
+        required: false
+        type: string
       cmd:
         required: true
         type: string
@@ -66,9 +69,17 @@ jobs:
         STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q ${{ inputs.application-name }} ))
         if [ "$STATUS" != "healthy" ]; then echo "${{ inputs.application-name }} is not healthy"; docker-compose -f docker-compose.test.yml ps; exit 1; fi
 
+    - name: Create Artifact
+      if: inputs.screenshot-patch != ''
+      uses: actions/upload-artifact@v3
+      with:
+        name: screenshots
+        path: ${{ inputs.screenshot-patch }}
+
     - name: Run command
       run: |
         docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} ${{ inputs.cmd}}
+
 
     - name: Stop containers
       if: always()
