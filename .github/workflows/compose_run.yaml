@@ -71,12 +71,12 @@ jobs:
         if [ "$STATUS" != "healthy" ]; then echo "${{ inputs.application-name }} is not healthy"; docker-compose -f docker-compose.test.yml ps; exit 1; fi
 
     - name: Run command
-      if: !inputs.code_coverage
+      if: ${{ !inputs.code_coverage }}
       run: |
         docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} ${{ inputs.cmd}}
 
     - name: Run command with code coverage
-      if: inputs.code_coverage
+      if: ${{ inputs.code_coverage }}
       run: |
         ci_env=`bash <(curl -s https://codecov.io/env)`
         docker-compose -f docker-compose.test.yml exec  -T -e CI=true $ci_env reaktor ${{ inputs.application-name }} ${{ inputs.cmd}}
