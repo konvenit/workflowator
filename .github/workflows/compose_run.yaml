@@ -23,6 +23,7 @@ on:
         required: true
 env:
   TAG: ${{ inputs.tag }}
+  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
 jobs:
   compose_run:
