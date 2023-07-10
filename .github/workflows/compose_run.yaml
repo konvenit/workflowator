@@ -79,7 +79,7 @@ jobs:
       if: ${{ inputs.code_coverage }}
       run: |
         ci_env=`bash <(curl -s https://codecov.io/env)`
-        docker-compose -f docker-compose.test.yml exec  -T -e CI=true $ci_env reaktor ${{ inputs.application-name }} ${{ inputs.cmd}}
+        docker-compose -f docker-compose.test.yml exec  -T -e CI=true $ci_env ${{ inputs.application-name }} ${{ inputs.cmd}}
 
     - name: Stop containers
       if: always()
