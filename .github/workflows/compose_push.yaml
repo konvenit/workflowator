@@ -9,9 +9,10 @@ on:
       tag:
         required: true
         type: string
-      number-of-services:
+      push_to_docker_hub:
         required: false
-        type: number
+        default: true
+        type: boolean
     secrets:
       dockerhub_user:
         required: true
@@ -77,6 +78,7 @@ jobs:
         if [ "$STATUS" != "healthy" ]; then echo "${{ inputs.application-name }} is not healthy"; docker-compose -f docker-compose.test.yml ps; exit 1; fi
 
     - name: Push Docker image to Docker Hub
+      if: ${{ inputs.push_to_docker_hub }}
       run: docker-compose -f docker-compose.test.yml push ${{ inputs.application-name}}
 
     - name: Stop containers
