@@ -38,7 +38,7 @@ jobs:
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
     - name: Pull Docker Compose test dependencies
-      run: docker-compose -f docker-compose.test.yml pull
+      run: docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting|downloading) '
 
     - name: Build Docker image
       run: docker-compose -f docker-compose.test.yml up -d
@@ -71,7 +71,7 @@ jobs:
 
         # check if all services are running
         RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
-        if [ "$RUNNING" != "$expected_services"]; then echo "not all services are running"; docker-compose -f docker-compose.test.yml logs; exit 1; fi
+        if [ "$RUNNING" != "$expected_services" ]; then echo "not all services are running"; docker-compose -f docker-compose.test.yml logs; exit 1; fi
 
         # check if the app is healthy
         STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q ${{ inputs.application-name}}))
