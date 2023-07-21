@@ -16,10 +16,10 @@ on:
       cmd:
         required: true
         type: string
-      algolia:
+      algolia_index:
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: null
     secrets:
       dockerhub_user:
         required: true
@@ -29,11 +29,11 @@ env:
   TAG: ${{ inputs.tag }}
   CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
   # https://github.com/actions/runner/issues/409
-  ALGOLIA_SUPPLIERS_INDEX_NAME_X: ${{ inputs.algolia && format('ci_{0}_{1}_{2}_supps', inputs.tag, github.run_number, github.job) || '' }}
-  ALGOLIA_MOMENTS_INDEX_NAME_X:   ${{ inputs.algolia && format('ci_{0}_{1}_{2}_momes', inputs.tag, github.run_number, github.job) || '' }}
-  ALGOLIA_APPLICATION:    ${{ inputs.algolia && secrets.ALGOLIA_APPLICATION    || '' }}
-  ALGOLIA_SEARCH_API_KEY: ${{ inputs.algolia && secrets.ALGOLIA_SEARCH_API_KEY || '' }}
-  ALGOLIA_WRITE_API_KEY:  ${{ inputs.algolia && secrets.ALGOLIA_WRITE_API_KEY  || '' }}
+  ALGOLIA_SUPPLIERS_INDEX_NAME_X: ${{ inputs.algolia_index && format('ci_{0}_{1}_{2}_supps', inputs.tag, github.run_number, inputs.algolia_index) || '' }}
+  ALGOLIA_MOMENTS_INDEX_NAME_X:   ${{ inputs.algolia_index && format('ci_{0}_{1}_{2}_momes', inputs.tag, github.run_number, inputs.algolia_index) || '' }}
+  ALGOLIA_APPLICATION:    ${{ inputs.algolia_index && secrets.ALGOLIA_APPLICATION    || '' }}
+  ALGOLIA_SEARCH_API_KEY: ${{ inputs.algolia_index && secrets.ALGOLIA_SEARCH_API_KEY || '' }}
+  ALGOLIA_WRITE_API_KEY:  ${{ inputs.algolia_index && secrets.ALGOLIA_WRITE_API_KEY  || '' }}
 
 jobs:
   compose_run:
@@ -82,7 +82,7 @@ jobs:
         if [ "$STATUS" != "healthy" ]; then echo "${{ inputs.application-name }} is not healthy"; docker-compose -f docker-compose.test.yml ps; exit 1; fi
 
     - name: Create Algolia index
-      if: ${{ inputs.algolia }}
+      if: ${{ inputs.algolia_index }}
       run: |
         env | grep = | sort | grep -i algolia
         echo ---------
@@ -103,7 +103,7 @@ jobs:
         docker-compose -f docker-compose.test.yml exec -T -e CI=true $ci_env ${{ inputs.application-name }} ${{ inputs.cmd}}
 
     - name: Remove Algolia index (flaky!)
-      if: ${{ inputs.algolia }}
+      if: ${{ inputs.algolia_index }}
       run: |
         env | grep = | sort | grep -i algolia
         echo ---------
