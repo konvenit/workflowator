@@ -1,0 +1,83 @@
+name: docker compose build
+
+on:
+  workflow_call:
+    inputs:
+      application-name:
+        required: true
+        type: string
+      tag:
+        required: false
+        type: string
+        default: ${{ github.event.pull_request.head.sha || github.sha }}
+    secrets:
+      dockerhub_user:
+        required: true
+      dockerhub_pass:
+        required: true
+
+env:
+  TAG: ${{ inputs.tag }}
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Log in to Docker Hub
+      run: |
+        docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
+
+    - name: Pull dependencies
+      run: docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs )'
+
+    - name: Build and/or start docker image
+      run: docker-compose -f docker-compose.test.yml up -d
+
+    - name: Prepare database
+      run: |
+        docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
+
+    - name: Wait while starting
+      run: |
+        sleep 5
+        tries=20
+        while :; do
+          tries=$(( tries - 1 ))
+          SERVICES=$(docker-compose -f docker-compose.test.yml ps)
+          if echo $SERVICES | grep -q '(health: starting)'
+          then
+            echo " -- Still waiting ($tries more) ..."
+            echo
+            echo "$SERVICES" | grep '(health: starting)'
+            if [[ $tries -lt 0 ]]; then
+              echo "Too many retries. Giving up."
+              exit 1
+            fi
+            sleep 2
+          else
+            echo " -- No more starting services..."
+            echo "$SERVICES"
+            break
+          fi
+        done
+
+    - name: Count started
+      run: |
+        n=$(ruby -e "require 'yaml'; print YAML.load_file('docker-compose.test.yml')['services'].count")
+        echo " --- Checking if all ${n} services are running..."
+        RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
+        if [ "$RUNNING" != "$n" ]; then
+          echo "not all services are running"
+          docker-compose -f docker-compose.test.yml logs
+          exit 1
+        fi
+
+    - name: Check if app is healthy
+      run: |
+        STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q ${{ inputs.application-name}}))
+        if [ "$STATUS" != "healthy" ]
+        then
+          echo "${{ inputs.application-name }} is not healthy:"
+          docker-compose -f docker-compose.test.yml ps
+          exit 1
+        fi

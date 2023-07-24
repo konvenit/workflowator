@@ -47,40 +47,14 @@ jobs:
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
 
-    - name: setup
-      run: |
-        expected_services=$(ruby -e "require 'yaml'; print YAML.load_file('docker-compose.test.yml')['services'].count")
-        echo "expected_services: $expected_services"
-
-        docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
-        docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs )'
-        docker-compose -f docker-compose.test.yml up -d
-        docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
-        sleep 5
-        # wait for all services to be started
-        echo "wait for all services to be started"
-        while :
-        do
-        SERVICES=$(docker-compose -f docker-compose.test.yml ps)
-        if echo $SERVICES | grep '(health: starting)' >> /dev/null; then
-            echo "waiting for services to start ..."
-            echo
-            echo "$SERVICES" | grep '(health: starting)'
-            sleep 2
-        else
-            echo "services started"
-            echo "$SERVICES"
-            break
-        fi
-        done
-
-        # check if all services are running
-        RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
-        if [ "$RUNNING" != "$expected_services" ]; then echo "not all services are running"; docker-compose -f docker-compose.test.yml logs; exit 1; fi
-
-        # check if the app is healty
-        STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q ${{ inputs.application-name }} ))
-        if [ "$STATUS" != "healthy" ]; then echo "${{ inputs.application-name }} is not healthy"; docker-compose -f docker-compose.test.yml ps; exit 1; fi
+    - name: Start app containers
+      uses: ./.github/workflows/compose.yml
+      with:
+        application-name: ${{ inputs.application-name }}
+        tag: ${{ inputs.tag }}
+      secrets:
+        dockerhub_user: ${{ secrets.dockerhub_user }}
+        dockerhub_pass: ${{ secrets.dockerhub_pass }}
 
     - name: Create Algolia index
       if: ${{ inputs.algolia_index }}
