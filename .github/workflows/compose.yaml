@@ -10,11 +10,6 @@ on:
         required: false
         type: string
         default: ${{ github.event.pull_request.head.sha || github.sha }}
-    secrets:
-      dockerhub_user:
-        required: true
-      dockerhub_pass:
-        required: true
 
 env:
   TAG: ${{ inputs.tag }}
@@ -23,10 +18,6 @@ jobs:
   compose:
     runs-on: ubuntu-latest
     steps:
-    - name: Log in to Docker Hub
-      run: |
-        docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
-
     - name: Pull dependencies
       run: docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs )'
 

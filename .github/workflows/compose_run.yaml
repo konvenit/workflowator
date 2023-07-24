@@ -47,14 +47,15 @@ jobs:
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
 
+    - name: Log in to Docker Hub
+      run: |
+        docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
+
     - name: Start app containers
       uses: ./.github/workflows/compose.yml
       with:
         application-name: ${{ inputs.application-name }}
         tag: ${{ inputs.tag }}
-      secrets:
-        dockerhub_user: ${{ secrets.dockerhub_user }}
-        dockerhub_pass: ${{ secrets.dockerhub_pass }}
 
     - name: Create Algolia index
       if: ${{ inputs.algolia_index }}
