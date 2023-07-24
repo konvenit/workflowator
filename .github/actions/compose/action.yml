@@ -12,22 +12,27 @@ runs:
   # - run: ${{ github.action_path }}/test/script.sh
   #   shell: bash
   steps:
-  - name: Pull dependencies
-    shell: bash
-    run: docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs )'
-
-  - name: Build and/or start docker image
-    shell: bash
-    run: docker-compose -f docker-compose.test.yml up -d
-
-  - name: Prepare database
-    shell: bash
+  - shell: bash
     run: |
+      echo "::group::Pull dependencies"
+      docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs |verifying checksum|download complete)'
+      echo "::endgroup::"
+
+  - shell: bash
+    run: |
+      echo "::group::docker-compose up"
+      docker-compose -f docker-compose.test.yml up -d
+      echo "::endgroup::"
+
+  - shell: bash
+    run: |
+      echo "::group::prepare database"
       docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
+      echo "::endgroup::"
 
-  - name: Wait while starting
-    shell: bash
+  - shell: bash
     run: |
+      echo "::group::Wait while starting"
       sleep 5
       tries=20
       while :; do
@@ -40,6 +45,7 @@ runs:
           echo "$SERVICES" | grep '(health: starting)'
           if [[ $tries -lt 0 ]]; then
             echo "Too many retries. Giving up."
+            echo "::error title=Starting timed out::Some services are still starting. Too many retries."
             exit 1
           fi
           sleep 2
@@ -49,26 +55,31 @@ runs:
           break
         fi
       done
+      echo "::endgroup::"
 
-  - name: Count started
-    shell: bash
+  - shell: bash
     run: |
+      echo "::group::Count started services"
       n=$(ruby -e "require 'yaml'; print YAML.load_file('docker-compose.test.yml')['services'].count")
       echo " --- Checking if all ${n} services are running..."
       RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
       if [ "$RUNNING" != "$n" ]; then
-        echo "not all services are running"
+        echo "  -- not all services are running"
+        echo "::error title=Starting failed::Not all expected services are running"
         docker-compose -f docker-compose.test.yml logs
         exit 1
       fi
+      echo "::endgroup::"
 
-  - name: Check if app is healthy
-    shell: bash
+  - shell: bash
     run: |
+      echo "::group::Check if app is healthy"
       STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q ${{ inputs.application-name}}))
       if [ "$STATUS" != "healthy" ]
       then
         echo "${{ inputs.application-name }} is not healthy:"
+        echo "::error title=Not healthy::The app is not in healthy status: ${STATUS}"
         docker-compose -f docker-compose.test.yml ps
         exit 1
       fi
+      echo "::endgroup::"

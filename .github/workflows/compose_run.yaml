@@ -51,8 +51,8 @@ jobs:
       run: |
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
-    - name: Start app containers
-      uses: ./workflowator/.github/compose
+    - name: Compose up
+      uses: konvenit/workflowator/.github/actions/compose@miceplace-test
       with:
         application-name: ${{ inputs.application-name }}
 

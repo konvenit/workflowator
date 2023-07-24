@@ -38,20 +38,7 @@ jobs:
       run: |
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
-    - name: Debug fs
-      run: |
-        pwd
-        ls -la
-        echo ----------
-        ls -la ..
-        echo ----------
-        ls -la ../..
-        echo ----------
-        ls -la ../../..
-        echo ----------
-        pwd
-
-    - name: Set up the app container
+    - name: Compose up
       uses: konvenit/workflowator/.github/actions/compose@miceplace-test
       with:
         application-name: ${{ inputs.application-name }}
