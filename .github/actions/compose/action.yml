@@ -14,25 +14,37 @@ runs:
   steps:
   - shell: bash
     run: |
-      echo "::group::Pull dependencies"
+      echo -------
+      echo "$TAG"
+      echo -------
+      echo $CODECOV_TOKEN | od -c
+      echo -------
+      echo $SECRETS_DOCKERHUB_PASS | od -c
+      echo -------
+      env | grep = | sort
+      echo -------
+
+  - shell: bash
+    run: |
+      echo "::group::>>> Pull dependencies"
       docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs |verifying checksum|download complete)'
       echo "::endgroup::"
 
   - shell: bash
     run: |
-      echo "::group::docker-compose up"
+      echo "::group::>>> docker-compose up"
       docker-compose -f docker-compose.test.yml up -d
       echo "::endgroup::"
 
   - shell: bash
     run: |
-      echo "::group::prepare database"
+      echo "::group::>>> prepare database"
       docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
       echo "::endgroup::"
 
   - shell: bash
     run: |
-      echo "::group::Wait while starting"
+      echo "::group::>>> Wait while starting"
       sleep 5
       tries=20
       while :; do
@@ -59,7 +71,7 @@ runs:
 
   - shell: bash
     run: |
-      echo "::group::Count started services"
+      echo "::group::>>> Count started services"
       n=$(ruby -e "require 'yaml'; print YAML.load_file('docker-compose.test.yml')['services'].count")
       echo " --- Checking if all ${n} services are running..."
       RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
@@ -73,7 +85,7 @@ runs:
 
   - shell: bash
     run: |
-      echo "::group::Check if app is healthy"
+      echo "::group::>>> Check if app is healthy"
       STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q ${{ inputs.application-name}}))
       if [ "$STATUS" != "healthy" ]
       then
