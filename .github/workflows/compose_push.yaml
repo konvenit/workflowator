@@ -7,8 +7,9 @@ on:
         required: true
         type: string
       tag:
-        required: true
+        required: false
         type: string
+        default: ${{ github.event.pull_request.head.sha || github.sha }}
       push_to_docker_hub:
         required: false
         default: true
@@ -38,7 +39,7 @@ jobs:
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
     - name: Pull Docker Compose test dependencies
-      run: docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting|downloading) '
+      run: docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs )'
 
     - name: Build Docker image
       run: docker-compose -f docker-compose.test.yml up -d

@@ -7,8 +7,9 @@ on:
         required: true
         type: string
       tag:
-        required: true
+        required: false
         type: string
+        default: ${{ github.event.pull_request.head.sha || github.sha }}
       code_coverage:
         required: false
         type: boolean
@@ -28,7 +29,7 @@ on:
 env:
   TAG: ${{ inputs.tag }}
   CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-  # https://github.com/actions/runner/issues/409 - there is still no conditional operator
+  # See https://github.com/actions/runner/issues/409 - there is still no conditional operator
   ALGOLIA_SUPPLIERS_INDEX_NAME: ${{ inputs.algolia_index && format('ci_{0}_{1}_{2}_supps', inputs.tag, github.run_number, inputs.algolia_index) || '' }}
   ALGOLIA_MOMENTS_INDEX_NAME:   ${{ inputs.algolia_index && format('ci_{0}_{1}_{2}_momes', inputs.tag, github.run_number, inputs.algolia_index) || '' }}
   ALGOLIA_APPLICATION:    ${{ inputs.algolia_index && secrets.ALGOLIA_APPLICATION    || '' }}
@@ -52,7 +53,7 @@ jobs:
         echo "expected_services: $expected_services"
 
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
-        docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting|downloading) '
+        docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs )'
         docker-compose -f docker-compose.test.yml up -d
         docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
         sleep 5
