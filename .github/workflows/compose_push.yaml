@@ -39,7 +39,7 @@ jobs:
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
     - name: Set up the app container
-      uses: ./.github/workflows/compose.yml
+      uses: konvenit/workflowator/.github/workflows/compose.yaml@miceplace-test
       with:
         application-name: ${{ inputs.application-name }}
         tag: ${{ inputs.tag }}
