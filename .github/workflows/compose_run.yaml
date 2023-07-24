@@ -13,13 +13,13 @@ on:
         required: false
         type: boolean
         default: false
-      cmd:
-        required: true
-        type: string
       algolia_index:
         required: false
         type: string
         default: null
+      cmd:
+        required: true
+        type: string
     secrets:
       dockerhub_user:
         required: true
@@ -28,9 +28,9 @@ on:
 env:
   TAG: ${{ inputs.tag }}
   CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-  # https://github.com/actions/runner/issues/409
-  ALGOLIA_SUPPLIERS_INDEX_NAME_X: ${{ inputs.algolia_index && format('ci_{0}_{1}_{2}_supps', inputs.tag, github.run_number, inputs.algolia_index) || '' }}
-  ALGOLIA_MOMENTS_INDEX_NAME_X:   ${{ inputs.algolia_index && format('ci_{0}_{1}_{2}_momes', inputs.tag, github.run_number, inputs.algolia_index) || '' }}
+  # https://github.com/actions/runner/issues/409 - there is still no conditional operator
+  ALGOLIA_SUPPLIERS_INDEX_NAME: ${{ inputs.algolia_index && format('ci_{0}_{1}_{2}_supps', inputs.tag, github.run_number, inputs.algolia_index) || '' }}
+  ALGOLIA_MOMENTS_INDEX_NAME:   ${{ inputs.algolia_index && format('ci_{0}_{1}_{2}_momes', inputs.tag, github.run_number, inputs.algolia_index) || '' }}
   ALGOLIA_APPLICATION:    ${{ inputs.algolia_index && secrets.ALGOLIA_APPLICATION    || '' }}
   ALGOLIA_SEARCH_API_KEY: ${{ inputs.algolia_index && secrets.ALGOLIA_SEARCH_API_KEY || '' }}
   ALGOLIA_WRITE_API_KEY:  ${{ inputs.algolia_index && secrets.ALGOLIA_WRITE_API_KEY  || '' }}
@@ -84,10 +84,8 @@ jobs:
     - name: Create Algolia index
       if: ${{ inputs.algolia_index }}
       run: |
-        env | grep = | sort | grep -i algolia
-        echo ---------
-        env | grep = | sort
-        echo ./bin/ci_compose exec rake algolia:create:all
+        docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bundle exec rake algolia:create:all
+        # ./bin/ci_compose exec rake algolia:create:all
 
     - name: Run command
       if: ${{ !inputs.code_coverage }}
@@ -97,18 +95,15 @@ jobs:
     - name: Run command with code coverage
       if: ${{ inputs.code_coverage }}
       run: |
-        # Aaaa! This is the same as: "Guys! Here is the root password to our testing machine. Please, run whatever you want"
-        # Can we download that file, review it, and then use our local copy?
+        # Could we download that file, review it, and then use that - approved by us - local copy?
         ci_env=`bash <(curl -s https://codecov.io/env)`
         docker-compose -f docker-compose.test.yml exec -T -e CI=true $ci_env ${{ inputs.application-name }} ${{ inputs.cmd}}
 
     - name: Remove Algolia index (flaky!)
-      if: ${{ inputs.algolia_index }}
+      if: inputs.algolia_index && (success() || failure() || cancelled())
       run: |
-        env | grep = | sort | grep -i algolia
-        echo ---------
-        env | grep = | sort
-        echo ./bin/ci_compose exec rake algolia:remove:all || true
+        docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bundle exec rake algolia:remove:all || true
+        # ./bin/ci_compose exec rake algolia:remove:all || true
 
     - name: Stop containers
       if: always()
