@@ -52,10 +52,9 @@ jobs:
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
     - name: Start app containers
-      uses: konvenit/workflowator/.github/workflows/compose.yaml@miceplace-test
+      uses: ./workflowator/.github/compose
       with:
         application-name: ${{ inputs.application-name }}
-        tag: ${{ inputs.tag }}
 
     - name: Create Algolia index
       if: ${{ inputs.algolia_index }}

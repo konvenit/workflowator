@@ -38,11 +38,23 @@ jobs:
       run: |
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
+    - name: Debug fs
+      run: |
+        pwd
+        ls -la
+        echo ----------
+        ls -la ..
+        echo ----------
+        ls -la ../..
+        echo ----------
+        ls -la ../../..
+        echo ----------
+        pwd
+
     - name: Set up the app container
-      uses: konvenit/workflowator/.github/workflows/compose.yaml@miceplace-test
+      uses: konvenit/workflowator/.github/actions/compose@miceplace-test
       with:
         application-name: ${{ inputs.application-name }}
-        tag: ${{ inputs.tag }}
 
     - name: Push Docker image to Docker Hub
       if: ${{ inputs.push_to_docker_hub }}
