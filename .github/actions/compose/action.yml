@@ -6,14 +6,6 @@ inputs:
     required: true
     type: string
 
-# TODO: maybe extract stuff to a script?
-# - run: ${{ github.action_path }}/test/script.sh
-#   shell: bash
-#
-# An action sees the whole environment of the caller, but not the secrets.
-# If we want docker login here, we need to pass the user+pass as inputs
-# or as env.
-
 runs:
   using: composite
   steps:
