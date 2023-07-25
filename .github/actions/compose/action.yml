@@ -1,29 +1,22 @@
 name: compose build and up
-description: Runs docker-compose up and waits for stuff to stay awake
+description: Runs docker-compose up and waits for stuff to start properly
 
 inputs:
   application-name:
     required: true
     type: string
 
+# TODO: maybe extract stuff to a script?
+# - run: ${{ github.action_path }}/test/script.sh
+#   shell: bash
+#
+# An action sees the whole environment of the caller, but not the secrets.
+# If we want docker login here, we need to pass the user+pass as inputs
+# or as env.
+
 runs:
   using: composite
-  # TODO: maybe extract stuff to a script?
-  # - run: ${{ github.action_path }}/test/script.sh
-  #   shell: bash
   steps:
-  - shell: bash
-    run: |
-      echo -------
-      echo "$TAG"
-      echo -------
-      echo $CODECOV_TOKEN | od -c
-      echo -------
-      echo $SECRETS_DOCKERHUB_PASS | od -c
-      echo -------
-      env | grep = | sort
-      echo -------
-
   - shell: bash
     run: |
       echo "::group::>>> Pull dependencies"
