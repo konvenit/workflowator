@@ -60,7 +60,6 @@ jobs:
       if: ${{ inputs.algolia_index }}
       run: |
         docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bundle exec rake algolia:create:all
-        # ./bin/ci_compose exec rake algolia:create:all
 
     - name: Run command
       if: ${{ !inputs.code_coverage }}
@@ -78,7 +77,6 @@ jobs:
       if: inputs.algolia_index && (success() || failure() || cancelled())
       run: |
         docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bundle exec rake algolia:remove:all || true
-        # ./bin/ci_compose exec rake algolia:remove:all || true
 
     - name: Stop containers
       if: always()
