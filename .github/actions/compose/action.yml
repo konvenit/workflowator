@@ -57,7 +57,7 @@ runs:
   - shell: bash
     run: |
       echo "::group::>>> Count started services"
-      n=$(ruby -e "require 'yaml'; print YAML.load_file('docker-compose.test.yml')['services'].count")
+      n=$(ruby -e "require 'yaml'; print YAML.safe_load('docker-compose.test.yml')['services'].count")
       echo " --- Checking if all ${n} services are running..."
       RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
       if [ "$RUNNING" != "$n" ]; then
