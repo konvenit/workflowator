@@ -39,7 +39,7 @@ jobs:
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
     - name: Compose up
-      uses: .github/actions/compose/action.yml
+      uses: konvenit/workflowator/.github/actions/compose@fix_load_yaml
       with:
         application-name: ${{ inputs.application-name }}
 
