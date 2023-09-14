@@ -82,11 +82,11 @@ jobs:
         docker-compose -f docker-compose.test.yml exec -T -e CI=true $ci_env ${{ inputs.application-name }} ${{ inputs.cmd}}
 
     - name: Run bash
-      if: inputs.bash != ''
+      if: always() && inputs.bash != ''
       run: ${{ inputs.bash }}
 
     - name: upload artifact
-      if: inputs.artifacts_path != ''
+      if: ${{ failure() && inputs.artifacts_path !=  '' }}
       uses: actions/upload-artifact@v3
       with:
         name: upload artifacts
