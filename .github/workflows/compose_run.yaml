@@ -25,6 +25,10 @@ on:
       cmd:
         required: true
         type: string
+      bash:
+        required: false
+        type: string
+        default: null
     secrets:
       dockerhub_user:
         required: true
@@ -70,19 +74,23 @@ jobs:
       run: |
         docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} ${{ inputs.cmd}}
 
-    - name: upload artifact
-      if: inputs.artifacts_path != ''
-      uses: actions/upload-artifact@v3
-      with:
-        name: upload artifacts
-        path: ${{ inputs.artifacts_path }}
-
     - name: Run command with code coverage
       if: ${{ inputs.code_coverage }}
       run: |
         # Could we download that file, review it, and then use that - approved by us - local copy?
         ci_env=`bash <(curl -s https://codecov.io/env)`
         docker-compose -f docker-compose.test.yml exec -T -e CI=true $ci_env ${{ inputs.application-name }} ${{ inputs.cmd}}
+
+    - name: Run bash
+      if: inputs.bash != ''
+      run: ${{ inputs.bash }}
+
+    - name: upload artifact
+      if: inputs.artifacts_path != ''
+      uses: actions/upload-artifact@v3
+      with:
+        name: upload artifacts
+        path: ${{ inputs.artifacts_path }}
 
     - name: Remove Algolia index (flaky!)
       if: inputs.algolia_index && always()
