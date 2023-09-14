@@ -18,6 +18,10 @@ on:
         required: false
         type: string
         default: null
+      artifacts_path:
+        required: false
+        type: string
+        default: null
       cmd:
         required: true
         type: string
@@ -65,6 +69,13 @@ jobs:
       if: ${{ !inputs.code_coverage }}
       run: |
         docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} ${{ inputs.cmd}}
+
+    - name: upload artifact
+      if: inputs.artifacts_path != ''
+      uses: actions/upload-artifact@v3
+      with:
+        name: upload artifacts
+        path: ${{ inputs.artifacts_path }
 
     - name: Run command with code coverage
       if: ${{ inputs.code_coverage }}
