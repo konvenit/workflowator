@@ -75,7 +75,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: upload artifacts
-        path: ${{ inputs.artifacts_path }
+        path: ${{ inputs.artifacts_path }}
 
     - name: Run command with code coverage
       if: ${{ inputs.code_coverage }}
