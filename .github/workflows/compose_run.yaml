@@ -78,6 +78,7 @@ jobs:
         docker-compose -f docker-compose.test.yml exec -T -e CI=true $ci_env ${{ inputs.application-name }} ${{ inputs.cmd}}
 
     - name: upload artifact
+      # uploads only if run failed
       if: ${{ failure() && inputs.artifacts_path !=  '' }}
       uses: actions/upload-artifact@v3
       with:
