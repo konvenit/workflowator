@@ -79,7 +79,7 @@ jobs:
 
     - name: upload artifact
       # uploads only if run failed
-      if: ${{ failure() && inputs.artifacts_path !=  '' }}
+      if: ${{ failure() && inputs.artifacts_path }}
       uses: actions/upload-artifact@v3
       with:
         name: upload artifacts
