@@ -56,7 +56,7 @@ jobs:
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v8
+      uses: konvenit/workflowator/.github/actions/compose@MP-49117-add-codecoverage-for-Javascript
       with:
         application-name: ${{ inputs.application-name }}
 
