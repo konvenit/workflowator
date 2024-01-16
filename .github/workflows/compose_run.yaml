@@ -77,6 +77,13 @@ jobs:
         ci_env=`bash <(curl -s https://codecov.io/env)`
         docker-compose -f docker-compose.test.yml exec -T -e CI=true $ci_env ${{ inputs.application-name }} ${{ inputs.cmd}}
 
+    - name: Upload coverage to Codecov
+      if: ${{ inputs.upload_code_coverage }}
+      uses: codecov/codecov-action@v2
+      with:
+        fail_ci_if_error: false
+        token: ${{ secrets.CODECOV_TOKEN }}
+
     - name: upload artifact
       # uploads only if run failed
       if: ${{ failure() && inputs.artifacts_path }}
