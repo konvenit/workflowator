@@ -88,6 +88,7 @@ jobs:
         name: Upload coverage to Codecov
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
+        files: coverage/cobertura-coverage.xml
 
     - name: upload artifact
       # uploads only if run failed
