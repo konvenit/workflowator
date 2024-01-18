@@ -85,6 +85,7 @@ jobs:
       if: ${{ inputs.upload_code_coverage }}
       uses: codecov/codecov-action@v3
       with:
+        name: Upload coverage to Codecov
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
 
