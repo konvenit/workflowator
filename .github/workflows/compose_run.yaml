@@ -18,6 +18,10 @@ on:
         required: false
         type: boolean
         default: false
+      jest_report_path:
+        required: false
+        type: string
+        default: null
       algolia_index:
         required: false
         type: string
@@ -88,7 +92,7 @@ jobs:
         name: Upload coverage to Codecov
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
-        files: coverage/cobertura-coverage.xml
+        files: ${{ inputs.jest_report_path }}
 
     - name: upload artifact
       # uploads only if run failed
