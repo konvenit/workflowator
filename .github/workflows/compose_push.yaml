@@ -39,7 +39,7 @@ jobs:
         docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
 
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v8
+      uses: konvenit/workflowator/.github/actions/compose@v10
       with:
         application-name: ${{ inputs.application-name }}
 
