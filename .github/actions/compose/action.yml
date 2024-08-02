@@ -12,7 +12,7 @@ runs:
   - shell: bash
     run: |
       echo "::group::>>> Pull dependencies"
-      docker compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs |verifying checksum|download complete)'
+      docker compose -f docker-compose.test.yml pull --ignore-pull-failures 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs |verifying checksum|download complete)'
       echo "::endgroup::"
 
   - shell: bash
