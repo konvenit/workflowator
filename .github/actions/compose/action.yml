@@ -12,19 +12,19 @@ runs:
   - shell: bash
     run: |
       echo "::group::>>> Pull dependencies"
-      docker-compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs |verifying checksum|download complete)'
+      docker compose -f docker-compose.test.yml pull 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs |verifying checksum|download complete)'
       echo "::endgroup::"
 
   - shell: bash
     run: |
-      echo "::group::>>> docker-compose up"
-      docker-compose -f docker-compose.test.yml up -d
+      echo "::group::>>> docker compose up"
+      docker compose -f docker-compose.test.yml up -d
       echo "::endgroup::"
 
   - shell: bash
     run: |
       echo "::group::>>> prepare database"
-      docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
+      docker compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
       echo "::endgroup::"
 
   - shell: bash
@@ -34,7 +34,7 @@ runs:
       tries=20
       while :; do
         tries=$(( tries - 1 ))
-        SERVICES=$(docker-compose -f docker-compose.test.yml ps)
+        SERVICES=$(docker compose -f docker-compose.test.yml ps)
         if echo $SERVICES | grep -q '(health: starting)'
         then
           echo " -- Still waiting ($tries more) ..."
@@ -59,11 +59,11 @@ runs:
       echo "::group::>>> Count started services"
       n=$(ruby -e "require 'yaml'; print YAML.safe_load(File.read('docker-compose.test.yml'))['services'].count")
       echo " --- Checking if all ${n} services are running..."
-      RUNNING=$(docker-compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
+      RUNNING=$(docker compose -f docker-compose.test.yml ps --services --filter "status=running" | wc -l)
       if [ "$RUNNING" != "$n" ]; then
         echo "  -- not all services are running"
         echo "::error title=Starting failed::Not all expected services are running"
-        docker-compose -f docker-compose.test.yml logs
+        docker compose -f docker-compose.test.yml logs
         exit 1
       fi
       echo "::endgroup::"
@@ -71,12 +71,12 @@ runs:
   - shell: bash
     run: |
       echo "::group::>>> Check if app is healthy"
-      STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker-compose -f docker-compose.test.yml ps -q ${{ inputs.application-name}}))
+      STATUS=$(docker inspect --format "{{.State.Health.Status}}" $(docker compose -f docker-compose.test.yml ps -q ${{ inputs.application-name}}))
       if [ "$STATUS" != "healthy" ]
       then
         echo "${{ inputs.application-name }} is not healthy:"
         echo "::error title=Not healthy::The app is not in healthy status: ${STATUS}"
-        docker-compose -f docker-compose.test.yml ps
+        docker compose -f docker-compose.test.yml ps
         exit 1
       fi
       echo "::endgroup::"

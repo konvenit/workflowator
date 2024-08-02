@@ -63,19 +63,19 @@ jobs:
     - name: Create Algolia index
       if: ${{ inputs.algolia_index }}
       run: |
-        docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bundle exec rake algolia:create:all
+        docker compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bundle exec rake algolia:create:all
 
     - name: Run command
       if: ${{ !inputs.code_coverage }}
       run: |
-        docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} ${{ inputs.cmd}}
+        docker compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} ${{ inputs.cmd}}
 
     - name: Run command with code coverage
       if: ${{ inputs.code_coverage }}
       run: |
         # Could we download that file, review it, and then use that - approved by us - local copy?
         ci_env=`bash <(curl -s https://codecov.io/env)`
-        docker-compose -f docker-compose.test.yml exec -T -e CI=true -e CODECOVERAGE=true $ci_env ${{ inputs.application-name }} ${{ inputs.cmd}}
+        docker compose -f docker-compose.test.yml exec -T -e CI=true -e CODECOVERAGE=true $ci_env ${{ inputs.application-name }} ${{ inputs.cmd}}
 
     - name: upload artifact
       # uploads only if run failed
@@ -88,8 +88,8 @@ jobs:
     - name: Remove Algolia index (flaky!)
       if: inputs.algolia_index && always()
       run: |
-        docker-compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bundle exec rake algolia:remove:all || true
+        docker compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bundle exec rake algolia:remove:all || true
 
     - name: Stop containers
       if: always()
-      run: docker-compose -f docker-compose.test.yml down
+      run: docker compose -f docker-compose.test.yml down
