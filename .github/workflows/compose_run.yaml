@@ -80,7 +80,7 @@ jobs:
     - name: upload artifact
       # uploads only if run failed
       if: ${{ failure() && inputs.artifacts_path }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: upload artifacts
         path: ${{ inputs.artifacts_path }}
