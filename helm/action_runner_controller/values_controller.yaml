@@ -1,0 +1,12 @@
+# https://github.com/actions/actions-runner-controller/blob/master/charts/gha-runner-scale-set-controller/values.yaml
+tolerations: [
+  {
+    "key": "ci",
+    "operator": "Equal",
+    "value": "true",
+    "effect": "NoSchedule"
+  }
+]
+nodeSelector: {
+  "ci": "true"
+}
