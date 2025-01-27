@@ -42,21 +42,26 @@ env:
 
 jobs:
   compose_run:
-    runs-on: ubuntu-22.04
+    runs-on: selfhosted-github-runner
 
     steps:
     - name: Checkout
       uses: actions/checkout@v1
 
+    - name: Log in to Docker Hub
+      run: |
+        docker login miceportal.nexus-registry-mice.boreus.de -u ${{ secrets.nexus_user }} -p ${{ secrets.nexus_pass }}
+        sudo apt update
+        sudo apt install libyaml-dev libgmp-dev -y
+        mkdir -p ~/.docker/cli-plugins/
+        curl -SL https://github.com/docker/compose/releases/download/v2.32.1/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose
+        chmod +x ~/.docker/cli-plugins/docker-compose
+
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
 
-    - name: Log in to Docker Hub
-      run: |
-        docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
-
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v12
+      uses: konvenit/workflowator/.github/actions/compose@MP-50534_Add_Action_Runner_Controller_helm_chart_values
       with:
         application-name: ${{ inputs.application-name }}
 

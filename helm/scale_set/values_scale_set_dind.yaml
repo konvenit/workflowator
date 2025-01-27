@@ -2,6 +2,8 @@
 # https://github.com/<your_enterprise/org/repo>
 githubConfigUrl: "https://github.com/konvenit"
 githubConfigSecret: github-pat
+minRunners: 2
+# maxRunners: 10
 template:
   spec:
     initContainers:
@@ -23,12 +25,18 @@ template:
           mountPath: /home/runner/_work
         - name: dind-sock
           mountPath: /var/run
+        - name: toolcache
+          mountPath: /opt/hostedtoolcache
     - name: dind
       image: docker:dind
       args:
         - dockerd
         - --host=unix:///var/run/docker.sock
         - --group=$(DOCKER_GROUP_GID)
+        - --max-concurrent-downloads=5
+        - --http-proxy=http://proxy20.boreus.de:3128/
+        - --https-proxy=http://proxy20.boreus.de:3128/
+        - --no-proxy=127.0.0.1,localhost,localhost.localdomain,cluster.local,10.43.0.1,miceportal-alpha.de,miceportal-alpha.com,miceportal.de,miceportal.com,svc.boreus.de,mice.boreus.de,registry.boreus.de,gitlab.boreus.de,*.nexus-registry-mice.boreus.de
       env:
         - name: DOCKER_GROUP_GID
           value: "123"
@@ -47,6 +55,8 @@ template:
     - name: dind-sock
       emptyDir: {}
     - name: dind-externals
+      emptyDir: {}
+    - name: toolcache
       emptyDir: {}
     nodeSelector: {
       "ci": "true"
