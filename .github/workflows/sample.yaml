@@ -14,7 +14,7 @@ on:
 jobs:
   sample-action:
     name: Sample action
-    runs-on: ubuntu-22.04
+    runs-on: selfhosted-github-runner
 
     steps:
       - name: Checkout repo
