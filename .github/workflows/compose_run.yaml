@@ -26,9 +26,9 @@ on:
         required: true
         type: string
     secrets:
-      dockerhub_user:
+      nexus_user:
         required: true
-      dockerhub_pass:
+      nexus_pass:
         required: true
 env:
   TAG: ${{ inputs.tag }}
@@ -51,9 +51,10 @@ jobs:
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
 
-    - name: Log in to Docker Hub
+    - name: Setup Nexus Access
       run: |
-        docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
+        echo "$(dig +short mice-prod-web01.dns.boreus.de) miceportal.nexus-registry-mice.boreus.de" | sudo tee -a /etc/hosts
+        docker login miceportal.nexus-registry-mice.boreus.de -u ${{ secrets.nexus_user }} -p ${{ secrets.nexus_pass }}
 
     - name: Compose up
       uses: konvenit/workflowator/.github/actions/compose@v12
