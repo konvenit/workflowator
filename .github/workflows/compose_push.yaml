@@ -19,10 +19,6 @@ on:
         required: true
       nexus_pass:
         required: true
-      dockerhub_user:
-        required: true
-      dockerhub_pass:
-        required: true
 
 env:
   TAG: ${{ inputs.tag }}
@@ -43,10 +39,6 @@ jobs:
         echo "$(dig +short mice-prod-web01.dns.boreus.de) miceportal.nexus-registry-mice.boreus.de" | sudo tee -a /etc/hosts
         docker login miceportal.nexus-registry-mice.boreus.de -u ${{ secrets.nexus_user }} -p ${{ secrets.nexus_pass }}
 
-    - name: Log in to Docker Hub
-      run: |
-        docker login -u ${{ secrets.dockerhub_user }} -p ${{ secrets.dockerhub_pass }}
-
     - name: Compose up
       uses: konvenit/workflowator/.github/actions/compose@v12
       with:
@@ -55,12 +47,6 @@ jobs:
     - name: Push Docker image to Nexus
       if: ${{ inputs.push_to_docker_hub }}
       run: docker compose -f docker-compose.test.yml push ${{ inputs.application-name}}
-
-    - name: Push Docker image to Dockerhub
-      if: ${{ inputs.push_to_docker_hub }}
-      run: |
-        docker tag $(docker compose  -f docker-compose.test.yml images ${{ inputs.application-name}} -q) miceportal/${{ inputs.application-name}}:${{ inputs.tag }}
-        docker push miceportal/${{ inputs.application-name}}:${{ inputs.tag }}
 
     - name: Stop containers
       if: always()
