@@ -45,7 +45,7 @@ jobs:
         docker login miceportal.nexus-registry-mice.boreus.de -u ${{ secrets.nexus_user }} -p ${{ secrets.nexus_pass }}
     - name: Setup Makandra Registry Access
       run: |
-        docker login registry.stage.miceportal.makandra.cloud-u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
+        docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
 
     - name: Compose up
       uses: konvenit/workflowator/.github/actions/compose@v12
