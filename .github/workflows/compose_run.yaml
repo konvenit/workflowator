@@ -57,7 +57,7 @@ jobs:
         docker login miceportal.nexus-registry-mice.boreus.de -u ${{ secrets.nexus_user }} -p ${{ secrets.nexus_pass }}
 
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v12
+      uses: konvenit/workflowator/.github/actions/compose@v16
       with:
         application-name: ${{ inputs.application-name }}
 
