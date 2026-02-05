@@ -24,7 +24,7 @@ runs:
   - shell: bash
     run: |
       echo "::group::>>> prepare database"
-      docker compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
+      docker compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} EAGER_LOAD=false bin/rails db:drop db:create db:test:prepare
       echo "::endgroup::"
 
   - shell: bash
