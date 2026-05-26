@@ -48,7 +48,7 @@ jobs:
         docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
 
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v16
+      uses: konvenit/workflowator/.github/actions/compose@v17
       with:
         application-name: ${{ inputs.application-name }}
 
