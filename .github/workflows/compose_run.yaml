@@ -51,6 +51,10 @@ jobs:
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
 
+    - name: Setup Makandra Registry Access
+      run: |
+        docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
+
     - name: Compose up
       uses: konvenit/workflowator/.github/actions/compose@v18
       with:
