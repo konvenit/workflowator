@@ -52,7 +52,7 @@ jobs:
       uses: ruby/setup-ruby@v1
 
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v17
+      uses: konvenit/workflowator/.github/actions/compose@v18
       with:
         application-name: ${{ inputs.application-name }}
 
