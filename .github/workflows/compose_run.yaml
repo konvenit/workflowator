@@ -51,11 +51,6 @@ jobs:
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
 
-    - name: Setup Nexus Access
-      run: |
-        echo "$(dig +short mice-prod-web01.dns.boreus.de) miceportal.nexus-registry-mice.boreus.de" | sudo tee -a /etc/hosts
-        docker login miceportal.nexus-registry-mice.boreus.de -u ${{ secrets.nexus_user }} -p ${{ secrets.nexus_pass }}
-
     - name: Compose up
       uses: konvenit/workflowator/.github/actions/compose@v17
       with:
