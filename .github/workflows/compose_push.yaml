@@ -47,7 +47,7 @@ jobs:
       run: |
         docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@mp53348_cache_bundler_and_npm
+      uses: konvenit/workflowator/.github/actions/compose@v20
       with:
         application-name: ${{ inputs.application-name }}
         cache-ref: ${{ inputs.cache_ref }}
