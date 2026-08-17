@@ -5,6 +5,17 @@ inputs:
   application-name:
     required: true
     type: string
+  cache-ref:
+    description: |
+      Registry ref used as the BuildKit cache backend, e.g.
+      registry.stage.miceportal.makandra.cloud/myapp:buildcache
+      When empty, builds run without a cache backend (previous behaviour).
+    required: false
+    default: ''
+  cache-push:
+    description: Whether to export the build cache (cache_to). Set false on PR builds to read cache without writing it.
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -13,6 +24,77 @@ runs:
     run: |
       echo "::group::>>> Pull dependencies"
       docker compose -f docker-compose.test.yml pull --ignore-pull-failures 2>&1 | grep -v -E '^Pulling .*\.\. (extracting |downloading |waiting|pulling fs |verifying checksum|download complete)'
+      echo "::endgroup::"
+
+  - name: Set up buildx builder
+    if: ${{ inputs.cache-ref != '' }}
+    shell: bash
+    run: |
+      echo "::group::>>> Set up buildx"
+      # The docker-container driver is required for registry cache export;
+      # the default "docker" driver does not support --cache-to.
+      docker buildx inspect ci-builder >/dev/null 2>&1 \
+        || docker buildx create --name ci-builder --driver docker-container --use
+      docker buildx use ci-builder
+      docker buildx inspect --bootstrap
+      echo "::endgroup::"
+
+  - name: Build images
+    shell: bash
+    env:
+      CACHE_REF: ${{ inputs.cache-ref }}
+      CACHE_PUSH: ${{ inputs.cache-push }}
+      APP_NAME: ${{ inputs.application-name }}
+    run: |
+      echo "::group::>>> Build"
+      if [ -z "$CACHE_REF" ]; then
+        # No cache backend configured: plain compose build against the local
+        # image store, matching the previous implicit build inside `up`.
+        docker compose -f docker-compose.test.yml build
+      else
+        # Build with the docker-container driver so the registry cache backend
+        # is available, and --load the result back into the local image store so
+        # the subsequent `docker compose up` finds it.
+        CACHE_ARGS="--cache-from type=registry,ref=${CACHE_REF}"
+        if [ "$CACHE_PUSH" = "true" ]; then
+          # mode=max exports intermediate stages too. This matters here: the
+          # bundler and yarn layers live in the discarded `build` stage, so
+          # mode=min (the default) would export nothing useful.
+          CACHE_ARGS="$CACHE_ARGS --cache-to type=registry,ref=${CACHE_REF},mode=max"
+        fi
+
+        # Resolve context/dockerfile/image from compose, so we honour whatever
+        # the application's compose file declares. Emits three tab-separated
+        # fields on success, or "ERROR<TAB><reason>" for a readable failure.
+        EXTRACT=$(docker compose -f docker-compose.test.yml config --format json | ruby -rjson -e '
+          s = (JSON.parse(STDIN.read)["services"] || {})[ENV["APP_NAME"]]
+          fail_with = ->(reason) { puts "ERROR\t#{reason}"; exit 0 }
+          fail_with.call("no service named %s" % ENV["APP_NAME"]) if s.nil?
+          fail_with.call("service has no build: section, so there is nothing to cache (unset cache-ref)") if s["build"].nil?
+          fail_with.call("service has no image: key; an explicit image name is required so the built image can be loaded back into the local store") if s["image"].to_s.empty?
+          puts [s["build"]["context"], s["build"]["dockerfile"] || "Dockerfile", s["image"]].join("\t")
+        ')
+
+        if [ "$(printf %s "$EXTRACT" | cut -f1)" = "ERROR" ]; then
+          echo "::error title=Cannot build ${APP_NAME}::$(printf %s "$EXTRACT" | cut -f2)"
+          exit 1
+        fi
+
+        CONTEXT=$(printf %s "$EXTRACT" | cut -f1)
+        DOCKERFILE=$(printf %s "$EXTRACT" | cut -f2)
+        IMAGE=$(printf %s "$EXTRACT" | cut -f3)
+
+        echo " --- building ${IMAGE} from ${CONTEXT}/${DOCKERFILE}"
+        docker buildx build \
+          --file "${CONTEXT}/${DOCKERFILE}" \
+          --tag "${IMAGE}" \
+          --load \
+          $CACHE_ARGS \
+          "${CONTEXT}"
+
+        # Any other services with a build section still build the classic way.
+        docker compose -f docker-compose.test.yml build
+      fi
       echo "::endgroup::"
 
   - shell: bash

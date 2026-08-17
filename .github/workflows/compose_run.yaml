@@ -25,10 +25,19 @@ on:
       cmd:
         required: true
         type: string
+      cache_ref:
+        description: Registry ref for the BuildKit cache backend. Empty disables build caching.
+        required: false
+        default: ''
+        type: string
     secrets:
       nexus_user:
         required: true
       nexus_pass:
+        required: true
+      makandra_registry_user:
+        required: true
+      makandra_registry_pass:
         required: true
 env:
   TAG: ${{ inputs.tag }}
@@ -56,9 +65,13 @@ jobs:
         docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
 
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v19
+      uses: konvenit/workflowator/.github/actions/compose@v20
       with:
         application-name: ${{ inputs.application-name }}
+        cache-ref: ${{ inputs.cache_ref }}
+        # Test runs read the cache but do not export it, so they cannot
+        # overwrite the cache produced by the push workflow.
+        cache-push: 'false'
 
     - name: Create Algolia index
       if: ${{ inputs.algolia_index }}

@@ -14,6 +14,11 @@ on:
         required: false
         default: true
         type: boolean
+      cache_ref:
+        description: Registry ref for the BuildKit cache backend. Empty disables build caching.
+        required: false
+        default: ''
+        type: string
 
     secrets:
       nexus_user:
@@ -42,9 +47,11 @@ jobs:
       run: |
         docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v19
+      uses: konvenit/workflowator/.github/actions/compose@v20
       with:
         application-name: ${{ inputs.application-name }}
+        cache-ref: ${{ inputs.cache_ref }}
+        cache-push: 'true'
     - name: Push Docker image to Makandra Registry
       if: ${{ inputs.push_to_docker_hub }}
       run: |
