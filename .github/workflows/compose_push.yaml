@@ -19,6 +19,11 @@ on:
         required: false
         default: ''
         type: string
+      cache_push:
+        description: Whether to export the build cache (cache_to). Set false on PR builds to read the cache without overwriting it.
+        required: false
+        default: true
+        type: boolean
 
     secrets:
       nexus_user:
@@ -47,11 +52,11 @@ jobs:
       run: |
         docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v20
+      uses: konvenit/workflowator/.github/actions/compose@v21
       with:
         application-name: ${{ inputs.application-name }}
         cache-ref: ${{ inputs.cache_ref }}
-        cache-push: 'true'
+        cache-push: ${{ inputs.cache_push }}
     - name: Push Docker image to Makandra Registry
       if: ${{ inputs.push_to_docker_hub }}
       run: |
