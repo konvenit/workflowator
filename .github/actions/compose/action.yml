@@ -106,8 +106,13 @@ runs:
   - shell: bash
     run: |
       echo "::group::>>> prepare database"
-      docker compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare
+      status=0
+      docker compose -f docker-compose.test.yml exec -T ${{ inputs.application-name }} bin/rails db:drop db:create db:test:prepare || status=$?
       echo "::endgroup::"
+      if [ $status -ne 0 ]; then
+        echo "::error title=prepare database failed::exit code ${status}; see the container logs dumped at the end of this job"
+        exit $status
+      fi
 
   - shell: bash
     run: |
@@ -145,7 +150,6 @@ runs:
       if [ "$RUNNING" != "$n" ]; then
         echo "  -- not all services are running"
         echo "::error title=Starting failed::Not all expected services are running"
-        docker compose -f docker-compose.test.yml logs
         exit 1
       fi
       echo "::endgroup::"
@@ -162,3 +166,13 @@ runs:
         exit 1
       fi
       echo "::endgroup::"
+
+  - name: Dump container logs on failure
+    if: failure()
+    shell: bash
+    run: |
+      echo "::group::>>> docker compose ps"
+      docker compose -f docker-compose.test.yml ps -a
+      echo "::endgroup::"
+      echo ">>> docker compose logs"
+      docker compose -f docker-compose.test.yml logs --no-color --tail 300
