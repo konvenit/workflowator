@@ -39,8 +39,15 @@ on:
         required: true
       makandra_registry_pass:
         required: true
+      github_ssh_key:
+        description: Private SSH key for git@github.com gems, passed into the build with RUN --mount=type=ssh
+        required: false
+      sidekiq_enterprise_credentials:
+        description: user:password for enterprise.contribsys.com, passed into the build with RUN --mount=type=secret,id=sidekiq_enterprise
+        required: false
 env:
   TAG: ${{ inputs.tag }}
+  SIDEKIQ_ENTERPRISE_CREDENTIALS: ${{ secrets.sidekiq_enterprise_credentials }}
   CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
   # See https://github.com/actions/runner/issues/409 - there is still no conditional operator
   ALGOLIA_SUPPLIERS_INDEX_NAME: ${{ inputs.algolia_index && format('ci_{0}_{1}_{2}_supps', inputs.tag, github.run_number, inputs.algolia_index) || '' }}
@@ -64,8 +71,21 @@ jobs:
       run: |
         docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
 
+    - name: Start ssh-agent for private gems
+      env:
+        GITHUB_SSH_KEY: ${{ secrets.github_ssh_key }}
+      run: |
+        if [ -z "$GITHUB_SSH_KEY" ]; then
+          echo "no github_ssh_key secret, building without ssh-agent"
+          exit 0
+        fi
+        eval "$(ssh-agent -s)"
+        ssh-add - <<< "$GITHUB_SSH_KEY"
+        echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+        echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v23
+      uses: konvenit/workflowator/.github/actions/compose@v23-slim
       with:
         application-name: ${{ inputs.application-name }}
         cache-ref: ${{ inputs.cache_ref }}

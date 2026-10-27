@@ -84,12 +84,23 @@ runs:
         DOCKERFILE=$(printf %s "$EXTRACT" | cut -f2)
         IMAGE=$(printf %s "$EXTRACT" | cut -f3)
 
+        # Credentials for private gems, set by the calling workflow. They are only
+        # mounted into the RUN steps that ask for them and never end up in a layer.
+        SECRET_ARGS=""
+        if [ -n "$SSH_AUTH_SOCK" ]; then
+          SECRET_ARGS="--ssh default"
+        fi
+        if [ -n "$SIDEKIQ_ENTERPRISE_CREDENTIALS" ]; then
+          SECRET_ARGS="$SECRET_ARGS --secret id=sidekiq_enterprise,env=SIDEKIQ_ENTERPRISE_CREDENTIALS"
+        fi
+
         echo " --- building ${IMAGE} from ${CONTEXT}/${DOCKERFILE}"
         docker buildx build \
           --file "${CONTEXT}/${DOCKERFILE}" \
           --tag "${IMAGE}" \
           --load \
           $CACHE_ARGS \
+          $SECRET_ARGS \
           "${CONTEXT}"
 
         # Any other services with a build section still build the classic way.
