@@ -3,6 +3,9 @@ name: retag an image in the Makandra registry
 # Points a second tag at an image compose_push already pushed, e.g. a moving
 # :latest for an app that staging boxes run from master. It republishes the
 # manifest instead of building again, so both tags name the same digest.
+#
+# Meant to be called on push to master. On a pull_request trigger source_tag
+# defaults to the PR head sha, which would move the tag to unmerged code.
 
 on:
   workflow_call:
@@ -24,8 +27,12 @@ on:
       makandra_registry_pass:
         required: true
 
+permissions: {}
+
 env:
   IMAGE: registry.stage.miceportal.makandra.cloud/${{ inputs.application-name }}
+  TAG: ${{ inputs.tag }}
+  SOURCE_TAG: ${{ inputs.source_tag }}
 
 jobs:
   retag:
@@ -33,9 +40,12 @@ jobs:
 
     steps:
     - name: Setup Makandra Registry Access
+      env:
+        REGISTRY_USER: ${{ secrets.makandra_registry_user }}
+        REGISTRY_PASS: ${{ secrets.makandra_registry_pass }}
       run: |
-        echo "${{ secrets.makandra_registry_pass }}" | docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} --password-stdin
+        printf '%s' "$REGISTRY_PASS" | docker login registry.stage.miceportal.makandra.cloud -u "$REGISTRY_USER" --password-stdin
 
     - name: Point the tag at the source image
       run: |
-        docker buildx imagetools create -t $IMAGE:${{ inputs.tag }} $IMAGE:${{ inputs.source_tag }}
+        docker buildx imagetools create -t "$IMAGE:$TAG" "$IMAGE:$SOURCE_TAG"
