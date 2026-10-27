@@ -1,11 +1,7 @@
 name: retag an image in the Makandra registry
 
-# Points a second tag at an image compose_push already pushed, e.g. a moving
-# :latest for an app that staging boxes run from master. It republishes the
-# manifest instead of building again, so both tags name the same digest.
-#
-# Meant to be called on push to master. On a pull_request trigger source_tag
-# defaults to the PR head sha, which would move the tag to unmerged code.
+# Points a second tag (e.g. :latest) at an image compose_push pushed, without rebuilding.
+# Call it on push to master: on a pull_request, source_tag defaults to the unmerged PR head.
 
 on:
   workflow_call:
