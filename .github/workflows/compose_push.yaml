@@ -34,9 +34,16 @@ on:
         required: true
       makandra_registry_pass:
         required: true
+      private_repo_private_key:
+        description: Private SSH key for git@github.com gems, passed into the build with RUN --mount=type=ssh
+        required: false
+      sidekiq_enterprise_credentials:
+        description: user:password for enterprise.contribsys.com, passed into the build with RUN --mount=type=secret,id=sidekiq_enterprise
+        required: false
 
 env:
   TAG: ${{ inputs.tag }}
+  SIDEKIQ_ENTERPRISE_CREDENTIALS: ${{ secrets.sidekiq_enterprise_credentials }}
 
 jobs:
   compose_push:
@@ -51,8 +58,20 @@ jobs:
     - name: Setup Makandra Registry Access
       run: |
         docker login registry.stage.miceportal.makandra.cloud -u ${{ secrets.makandra_registry_user }} -p ${{ secrets.makandra_registry_pass }}
+    - name: Start ssh-agent for private gems
+      env:
+        PRIVATE_REPO_PRIVATE_KEY: ${{ secrets.private_repo_private_key }}
+      run: |
+        if [ -z "$PRIVATE_REPO_PRIVATE_KEY" ]; then
+          echo "no private_repo_private_key secret, building without ssh-agent"
+          exit 0
+        fi
+        eval "$(ssh-agent -s)"
+        ssh-add - <<< "$PRIVATE_REPO_PRIVATE_KEY"
+        echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+        echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v23
+      uses: konvenit/workflowator/.github/actions/compose@v23-slim
       with:
         application-name: ${{ inputs.application-name }}
         cache-ref: ${{ inputs.cache_ref }}
