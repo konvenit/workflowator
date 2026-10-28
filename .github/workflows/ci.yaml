@@ -102,6 +102,11 @@ on:
         required: false
         default: http://localhost:3000/ready
         type: string
+      skip_tests:
+        description: Only build the images, without running the checks, independent jobs and tests, e.g. for draft PRs
+        required: false
+        default: false
+        type: boolean
       ci_image_versions_to_keep:
         description: How many test images to keep on GHCR, older ones are deleted
         required: false
@@ -426,7 +431,7 @@ jobs:
 
   checks:
     needs: build
-    if: inputs.checks != '[]'
+    if: ${{ !inputs.skip_tests && inputs.checks != '[]' }}
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
@@ -574,7 +579,7 @@ jobs:
 
   independent:
     needs: build
-    if: inputs.independent != '[]'
+    if: ${{ !inputs.skip_tests && inputs.independent != '[]' }}
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
@@ -588,7 +593,7 @@ jobs:
   tests:
     needs: [build, checks]
     # Also runs when there are no checks and the checks job was skipped
-    if: ${{ !cancelled() && inputs.tests != '[]' && needs.build.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.checks.result) }}
+    if: ${{ !cancelled() && !inputs.skip_tests && inputs.tests != '[]' && needs.build.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.checks.result) }}
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
