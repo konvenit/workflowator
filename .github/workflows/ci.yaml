@@ -253,8 +253,19 @@ jobs:
             echo "${image} is cached as ${cached}"
           else
             echo "::group::>>> Copying ${image} to ${cached}"
-            docker buildx imagetools create --tag "$cached" "${image%@*}@${platform_digest:-$digest}"
-            echo "::endgroup::"
+            # Pulled and pushed in two steps: copying straight from one registry
+            # to the other keeps an upload to GHCR open for as long as the slow
+            # download takes, and GHCR drops it. docker pull retries failed layers.
+            if docker pull --quiet "${image%@*}@${platform_digest:-$digest}" \
+              && docker tag "${image%@*}@${platform_digest:-$digest}" "$cached" \
+              && docker push --quiet "$cached"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              # The build then pulls it from the makandra registry itself, as it did before
+              echo "::warning title=Base image not cached::could not copy ${image} to ${cached}"
+              continue
+            fi
           fi
           # Makes the build use the copy wherever the Dockerfile says FROM <image>
           contexts="$contexts --build-context ${image}=docker-image://${cached}"
