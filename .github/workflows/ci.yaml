@@ -92,10 +92,20 @@ on:
         required: false
         default: true
         type: boolean
+      smoke_test:
+        description: Start the production image and request smoke_test_url before pushing it
+        required: false
+        default: true
+        type: boolean
       smoke_test_cmd:
-        description: Command the production image is started with in the app service of the compose file. Empty skips the smoke test.
+        description: Command the production image is started with in the app service of the compose file
         required: false
         default: server production
+        type: string
+      smoke_test_prepare_cmd:
+        description: Command the production image is run with once before the smoke test, to create and load the database. Empty skips it.
+        required: false
+        default: prepare production
         type: string
       smoke_test_url:
         description: Requested inside the started production container until it answers successfully
@@ -395,15 +405,23 @@ jobs:
           $BASE_CONTEXTS $SECRET_ARGS .
 
     - name: Smoke test
-      if: inputs.smoke_test_cmd != ''
+      if: inputs.smoke_test
       env:
         SMOKE_TEST_CMD: ${{ inputs.smoke_test_cmd }}
+        SMOKE_TEST_PREPARE_CMD: ${{ inputs.smoke_test_prepare_cmd }}
         SMOKE_TEST_URL: ${{ inputs.smoke_test_url }}
       run: |
         # Starts the production image as the app service of the compose file, so
         # it gets the database and environment the tests get, but in production mode
         image=$(docker compose config --format json | jq -r --arg app "$APP" '.services[$app].image')
         docker tag "${MAKANDRA_REGISTRY}/${APP}:${TAG}" "$image"
+        if [ -n "$SMOKE_TEST_PREPARE_CMD" ]; then
+          # The production database does not exist yet. Creating it with the
+          # production image, as the deploy does, also tests its migrations.
+          echo "::group::>>> Prepare the database"
+          docker compose run --rm -e RAILS_ENV=production "$APP" $SMOKE_TEST_PREPARE_CMD
+          echo "::endgroup::"
+        fi
         echo "::group::>>> Start services"
         docker compose run -d --name smoke -e RAILS_ENV=production "$APP" $SMOKE_TEST_CMD
         echo "::endgroup::"
