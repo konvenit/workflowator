@@ -380,8 +380,56 @@ jobs:
         docker buildx create --name ci-builder --driver docker-container --use
         docker buildx inspect --bootstrap
 
+    - name: Build info
+      id: build_info
+      env:
+        GH_TOKEN: ${{ github.token }}
+        # The pushed commit, not the merge commit a pull request checks out
+        COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        BRANCH: ${{ github.head_ref || github.ref_name }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        PULL_REQUEST: ${{ toJSON(github.event.pull_request) }}
+      run: |
+        if ! commit=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${COMMIT}"); then
+          echo "::warning title=No build info::could not fetch commit ${COMMIT}"
+          exit 0
+        fi
+        pr=$(jq -c '. // {}' <<< "$PULL_REQUEST")
+        info=$(jq -c -n \
+          --argjson commit "$commit" \
+          --argjson pr "$pr" \
+          --arg repo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+          --arg branch "$BRANCH" \
+          --arg default_branch "$DEFAULT_BRANCH" \
+          --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          --arg ci_run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" '
+          # The Jira ticket from the branch, e.g. mp54204_slim_down, else from the pull request title
+          def ticket: [$branch, ($pr.title // "")]
+            | map(capture("(^|[^a-z])mp[-_ ]?(?<n>[0-9]+)"; "i").n) | first // empty | "MP-\(.)";
+          {
+            commit_url:               "\($repo)/commit/\($commit.sha)",
+            tree_url:                 "\($repo)/tree/\($commit.sha)",
+            diff_master_url:          "\($repo)/compare/\($commit.sha)...\($default_branch)",
+            last_commit:              $commit.sha[0:7],
+            last_changed_date:        $commit.commit.committer.date,
+            last_changed_author:      "<\($commit.commit.author.email)>",
+            revision:                 ($commit.commit.message | split("\n")[0]),
+            branch:                   $branch,
+            ticket:                   (ticket // ""),
+            ticket_url:               (ticket | "https://miceportal.atlassian.net/browse/\(.)") // "",
+            last_changed_author_name: $commit.commit.author.name,
+            pr_number:                $pr.number,
+            pr_title:                 $pr.title,
+            pr_url:                   $pr.html_url,
+            built_at:                 $built_at,
+            ci_run_url:               $ci_run_url
+          }')
+        echo "$info"
+        echo "json=${info}" >> "$GITHUB_OUTPUT"
+
     - name: Build the production image
       env:
+        BUILD_INFO: ${{ steps.build_info.outputs.json }}
         CACHE: ${{ needs.build.outputs.cache }}
         BRANCH: ${{ needs.build.outputs.branch }}
         DEFAULT_BRANCH: ${{ needs.build.outputs.default_branch }}
@@ -397,11 +445,9 @@ jobs:
           SECRET_ARGS="$SECRET_ARGS --secret id=sidekiq_enterprise,env=SIDEKIQ_ENTERPRISE_CREDENTIALS"
         fi
 
-        # Shares the build stages with the test image, so these come from the
-        # cache the build job just wrote. --load instead of --push: it is only
-        # pushed once it passed the smoke test.
         docker buildx build --file "$DOCKERFILE" --target "$TARGET" \
           --tag "${MAKANDRA_REGISTRY}/${APP}:${TAG}" --load \
+          --build-arg "BUILD_INFO=${BUILD_INFO}" \
           --cache-from "type=registry,ref=${CACHE}:production-${BRANCH}" \
           --cache-from "type=registry,ref=${CACHE}:production-${DEFAULT_BRANCH}" \
           --cache-from "type=registry,ref=${CACHE}:test-${BRANCH}" \
@@ -416,8 +462,6 @@ jobs:
         SMOKE_TEST_PREPARE_CMD: ${{ inputs.smoke_test_prepare_cmd }}
         SMOKE_TEST_URL: ${{ inputs.smoke_test_url }}
       run: |
-        # Starts the production image as the app service of the compose file, so
-        # it gets the database and environment the tests get, but in production mode
         image=$(docker compose config --format json | jq -r --arg app "$APP" '.services[$app].image')
         docker tag "${MAKANDRA_REGISTRY}/${APP}:${TAG}" "$image"
         if [ -n "$SMOKE_TEST_PREPARE_CMD" ]; then
