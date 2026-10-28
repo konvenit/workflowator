@@ -128,7 +128,7 @@ on:
         default: 30
         type: number
       cache_versions_to_keep:
-        description: How many versions of the build cache to keep on GHCR, older ones are deleted
+        description: How many build caches (one per branch and target) to keep on GHCR, older ones are deleted
         required: false
         default: 100
         type: number
@@ -325,20 +325,22 @@ jobs:
     - name: Delete old test images from GHCR
       # Cleanup must never fail the build
       continue-on-error: true
-      uses: actions/delete-package-versions@v5
+      uses: dataaxiom/ghcr-cleanup-action@v1.2.2
       with:
-        package-name: ${{ steps.names.outputs.ci_package }}
-        package-type: container
-        min-versions-to-keep: ${{ inputs.ci_image_versions_to_keep }}
+        package: ${{ steps.names.outputs.ci_package }}
+        keep-n-tagged: ${{ inputs.ci_image_versions_to_keep }}
+        # What a tag pointed to before it was pushed again
+        delete-untagged: true
 
     - name: Delete old build caches from GHCR
       # The default branch writes its cache on every push, so it is always among the newest
       continue-on-error: true
-      uses: actions/delete-package-versions@v5
+      uses: dataaxiom/ghcr-cleanup-action@v1.2.2
       with:
-        package-name: ${{ steps.names.outputs.cache_package }}
-        package-type: container
-        min-versions-to-keep: ${{ inputs.cache_versions_to_keep }}
+        package: ${{ steps.names.outputs.cache_package }}
+        keep-n-tagged: ${{ inputs.cache_versions_to_keep }}
+        # Every push replaces its branch's cache, which leaves the previous one untagged
+        delete-untagged: true
 
   production:
     needs: build
