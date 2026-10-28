@@ -87,6 +87,11 @@ on:
         required: false
         type: string
         default: docker-compose.test.yml
+      app_cmd:
+        description: Command the app container is started with for the entries that start services. It must prepare the app and then end in bash, which keeps the container running for cmd. The default has the image's entrypoint copy the test config files, without starting the server.
+        required: false
+        default: bash test
+        type: string
       push_to_docker_hub:
         description: Push the production image to the makandra registry
         required: false
@@ -500,7 +505,8 @@ jobs:
         docker tag "$CI_IMAGE" "$image"
         echo "::endgroup::"
         if [ "$SERVICES" = "true" ]; then
-          echo "EXEC=docker compose exec -T" >> "$GITHUB_ENV"
+          # The app container is named after the app, see Start services
+          echo "EXEC=docker exec" >> "$GITHUB_ENV"
           # The services the app runs with: those of the entry, or all of the compose file
           if [ "$SERVICES_JSON" = "null" ]; then
             dependencies=$(docker compose config --services | grep -vx "$APP" | xargs)
@@ -522,50 +528,38 @@ jobs:
 
     - name: Start services
       if: env.SERVICES == 'true'
+      env:
+        APP_CMD: ${{ inputs.app_cmd }}
       run: |
         # The dependencies first, waiting until they are healthy, as depends_on
         # would. --no-deps then keeps the app from starting the ones left out.
         if [ -n "$DEPENDENCIES" ]; then
           docker compose up -d --wait $DEPENDENCIES
         fi
-        docker compose up -d --no-build --no-deps "$APP"
+        # The app container only has to be there for cmd to run in, so it does
+        # not start the server. run -d keeps its stdin open, so the bash that
+        # app_cmd ends in waits on it instead of exiting. --use-aliases lets the
+        # other services reach it by the service name, e.g. the browser the
+        # Capybara server.
+        docker compose run -d --no-deps --use-aliases --name "$APP" "$APP" $APP_CMD
+        # The entrypoint prepares the app and then replaces itself with bash
+        tries=30
+        until [ "$(docker exec "$APP" cat /proc/1/comm 2>/dev/null || true)" = "bash" ]; do
+          tries=$(( tries - 1 ))
+          if [ "$(docker inspect --format '{{.State.Running}}' "$APP")" != "true" ]; then
+            echo "::error title=Starting failed::${APP} exited while starting"
+            exit 1
+          fi
+          if [[ $tries -lt 0 ]]; then
+            echo "::error title=Starting timed out::${APP} did not finish starting"
+            exit 1
+          fi
+          sleep 1
+        done
 
     - name: Prepare database
       if: env.SERVICES == 'true'
-      run: docker compose exec -T "$APP" bin/rails db:drop db:create db:test:prepare
-
-    - name: Wait while starting
-      if: env.SERVICES == 'true'
-      run: |
-        sleep 5
-        tries=20
-        while docker compose ps | grep -q '(health: starting)'; do
-          tries=$(( tries - 1 ))
-          if [[ $tries -lt 0 ]]; then
-            echo "::error title=Starting timed out::Some services are still starting. Too many retries."
-            docker compose ps
-            exit 1
-          fi
-          echo " -- Still waiting ($tries more) ..."
-          docker compose ps | grep '(health: starting)'
-          sleep 2
-        done
-        docker compose ps
-
-    - name: Check services
-      if: env.SERVICES == 'true'
-      run: |
-        expected=$(( $(wc -w <<< "$DEPENDENCIES") + 1 ))
-        running=$(docker compose ps --services --filter "status=running" | wc -l)
-        if [ "$running" != "$expected" ]; then
-          echo "::error title=Starting failed::Only ${running} of ${expected} services are running"
-          exit 1
-        fi
-        status=$(docker inspect --format "{{.State.Health.Status}}" $(docker compose ps -q "$APP"))
-        if [ "$status" != "healthy" ]; then
-          echo "::error title=Not healthy::${APP} is not healthy: ${status}"
-          exit 1
-        fi
+      run: $EXEC "$APP" bin/rails db:drop db:create db:test:prepare
 
     - name: Create Algolia index
       if: matrix.algolia_index
@@ -600,11 +594,14 @@ jobs:
       if: failure()
       run: |
         docker compose ps -a
+        docker logs --tail 300 "$APP" || true
         docker compose logs --no-color --tail 300
 
     - name: Stop containers
       if: always()
-      run: docker compose down
+      run: |
+        docker rm -f "$APP" || true
+        docker compose down
 
   independent:
     needs: build
