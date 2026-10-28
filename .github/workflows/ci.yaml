@@ -1,5 +1,6 @@
-# The whole CI of an app in one reusable workflow: it builds the images once and
-# then runs every check and test as a matrix job in the test image.
+# The whole CI of an app in one reusable workflow: it builds the test image once
+# and then runs every check and test as a matrix job in it. The production image
+# is built, smoke tested and pushed alongside, off the critical path.
 #
 #   ci:
 #     uses: konvenit/workflowator/.github/workflows/ci.yaml@<tag>
@@ -9,21 +10,33 @@
 #     with:
 #       application-name: katalysator
 #       checks: |
-#         [{"name": "rubocop", "cmd": "bin/rubocop -F -f s"}]
+#         [{"name": "rubocop", "cmd": "bin/rubocop -F -f s", "services": false}]
+#       independent: |
+#         [{"name": "brakeman", "cmd": "bin/static_analysis --no-pager -w3", "services": false}]
 #       tests: |
 #         [{"name": "models", "cmd": "bin/rspec spec/models"},
 #          {"name": "integrations", "cmd": "bin/rspec spec/integrations", "artifacts_path": "/tmp/screenshots"}]
 #     secrets: inherit
 #
-# Images, both built from the app's Dockerfile:
+# Images, all built from the app's Dockerfile:
 # - the test target (the app's build target in the compose file) goes to ghcr.io/<owner>/<app>-ci:<tag>. Only CI uses it, and
 #   pulls from GHCR are fast on GitHub's runners.
 # - the production target goes to the makandra registry as <app>:<tag>, which is
-#   what staging deploys.
+#   what staging deploys. It is only pushed after it passed the smoke test.
+#
+# Caches, all on GHCR because pulls from the makandra registry are slow on GitHub's runners:
+# - ghcr.io/<owner>/<app>-ci-base: copies of the Dockerfile's base images from the
+#   makandra registry, one tag per base image digest. The build uses them in place
+#   of the originals, so they are only pulled from the makandra registry once.
+# - ghcr.io/<owner>/<app>-ci-cache: the BuildKit cache, one tag per branch and target.
+#   Every branch writes its own and reads it together with the default branch's.
 #
 # Each matrix entry takes:
 #   name            job name
-#   cmd             command run with docker compose exec in the app container
+#   cmd             command run in the app container
+#   services        which other services of the compose file to start next to the app,
+#                   e.g. ["postgres"] to leave out the browser. All of them by default.
+#                   false runs cmd in a container of its own, without starting any.
 #   artifacts_path  uploaded when the job fails, e.g. /tmp/screenshots
 #   code_coverage   true to report to codecov
 #   algolia_index   creates the algolia indexes before and removes them after the run
@@ -44,6 +57,11 @@ on:
         default: ${{ github.event.pull_request.head.sha || github.sha }}
       checks:
         description: JSON list of matrix entries that run first; tests only start when all of them pass
+        required: false
+        type: string
+        default: '[]'
+      independent:
+        description: JSON list of matrix entries that run alongside the checks, not waiting for them
         required: false
         type: string
         default: '[]'
@@ -74,20 +92,25 @@ on:
         required: false
         default: true
         type: boolean
-      cache_ref:
-        description: Registry ref for the BuildKit cache backend. Empty disables build caching.
+      smoke_test_cmd:
+        description: Command the production image is started with in the app service of the compose file. Empty skips the smoke test.
         required: false
-        default: ''
+        default: server production
         type: string
-      cache_push:
-        description: Whether to export the build cache (cache_to). Set false on PR builds to read the cache without overwriting it.
+      smoke_test_url:
+        description: Requested inside the started production container until it answers successfully
         required: false
-        default: true
-        type: boolean
+        default: http://localhost:3000/ready
+        type: string
       ci_image_versions_to_keep:
         description: How many test images to keep on GHCR, older ones are deleted
         required: false
         default: 30
+        type: number
+      cache_versions_to_keep:
+        description: How many versions of the build cache to keep on GHCR, older ones are deleted
+        required: false
+        default: 100
         type: number
 
     secrets:
@@ -124,6 +147,10 @@ jobs:
       packages: write
     outputs:
       ci_image: ${{ steps.names.outputs.ci_image }}
+      cache: ${{ steps.names.outputs.cache }}
+      branch: ${{ steps.names.outputs.branch }}
+      default_branch: ${{ steps.names.outputs.default_branch }}
+      base_contexts: ${{ steps.base.outputs.contexts }}
     env:
       SIDEKIQ_ENTERPRISE_CREDENTIALS: ${{ secrets.sidekiq_enterprise_credentials }}
 
@@ -133,11 +160,19 @@ jobs:
 
     - name: Image names
       id: names
+      env:
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
-        # GHCR only accepts lower case names
+        # GHCR only accepts lower case names, and tags only of [a-z0-9_.-]
         owner="${GITHUB_REPOSITORY_OWNER,,}"
+        slug() { printf %s "${1,,}" | tr -c 'a-z0-9_.-' '-' | cut -c1-100; }
         echo "ci_package=${APP}-ci" >> "$GITHUB_OUTPUT"
         echo "ci_image=ghcr.io/${owner}/${APP}-ci:${TAG}" >> "$GITHUB_OUTPUT"
+        echo "base=ghcr.io/${owner}/${APP}-ci-base" >> "$GITHUB_OUTPUT"
+        echo "cache_package=${APP}-ci-cache" >> "$GITHUB_OUTPUT"
+        echo "cache=ghcr.io/${owner}/${APP}-ci-cache" >> "$GITHUB_OUTPUT"
+        echo "branch=$(slug "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}")" >> "$GITHUB_OUTPUT"
+        echo "default_branch=$(slug "$DEFAULT_BRANCH")" >> "$GITHUB_OUTPUT"
 
     - name: Registry logins
       env:
@@ -167,10 +202,67 @@ jobs:
         docker buildx create --name ci-builder --driver docker-container --use
         docker buildx inspect --bootstrap
 
+    - name: Cache base images on GHCR
+      id: base
+      env:
+        BASE: ${{ steps.names.outputs.base }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+      run: |
+        # The base images of the Dockerfile, with the defaults of the global ARGs filled in
+        images=$(ruby -e '
+          args, stages, from_seen = {}, ["scratch"], false
+          File.foreach(ARGV[0]) do |line|
+            case line
+            when /^\s*ARG\s+(\w+)=(\S*)/i
+              args[$1] = $2.delete(%q("'"'"')) unless from_seen
+            when /^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?/i
+              ref, stage = $1, $2
+              from_seen = true
+              image = ref.gsub(/\$\{?(\w+)\}?/) { args[$1].to_s }
+              puts image unless stages.include?(image.downcase)
+              stages << stage.downcase if stage
+            end
+          end
+        ' "$DOCKERFILE" | sort -u)
+
+        case "$(uname -m)" in
+          aarch64|arm64) arch=arm64 ;;
+          *) arch=amd64 ;;
+        esac
+
+        contexts=""
+        for image in $images; do
+          case "$image" in
+            "$MAKANDRA_REGISTRY"/*) ;;
+            *) continue ;;
+          esac
+          # Only the manifest is fetched here, which is fast; the layers are what is slow
+          manifest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}')
+          digest=$(jq -r .digest <<< "$manifest")
+          # Of a multi-platform image only the runner's platform is copied
+          platform_digest=$(jq -r --arg arch "$arch" '[.manifests[]? | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest][0] // empty' <<< "$manifest")
+          name="${image#"$MAKANDRA_REGISTRY"/}"
+          cached="${BASE}:$(printf %s "$name" | tr -c 'A-Za-z0-9_.-' '-')-${digest:7:12}"
+
+          if docker buildx imagetools inspect "$cached" > /dev/null 2>&1; then
+            echo "${image} is cached as ${cached}"
+          else
+            echo "::group::>>> Copying ${image} to ${cached}"
+            docker buildx imagetools create --tag "$cached" "${image%@*}@${platform_digest:-$digest}"
+            echo "::endgroup::"
+          fi
+          # Makes the build use the copy wherever the Dockerfile says FROM <image>
+          contexts="$contexts --build-context ${image}=docker-image://${cached}"
+        done
+        echo "contexts=${contexts}" >> "$GITHUB_OUTPUT"
+
     - name: Build and push the test image
       env:
         CI_IMAGE: ${{ steps.names.outputs.ci_image }}
-        CACHE_REF: ${{ inputs.cache_ref }}
+        CACHE: ${{ steps.names.outputs.cache }}
+        BRANCH: ${{ steps.names.outputs.branch }}
+        DEFAULT_BRANCH: ${{ steps.names.outputs.default_branch }}
+        BASE_CONTEXTS: ${{ steps.base.outputs.contexts }}
         DOCKERFILE: ${{ inputs.dockerfile }}
         TARGET: ${{ inputs.test_target }}
       run: |
@@ -183,10 +275,6 @@ jobs:
         if [ -n "$SIDEKIQ_ENTERPRISE_CREDENTIALS" ]; then
           SECRET_ARGS="$SECRET_ARGS --secret id=sidekiq_enterprise,env=SIDEKIQ_ENTERPRISE_CREDENTIALS"
         fi
-        CACHE_ARGS=""
-        if [ -n "$CACHE_REF" ]; then
-          CACHE_ARGS="--cache-from type=registry,ref=${CACHE_REF}"
-        fi
         if [ -z "$TARGET" ]; then
           TARGET=$(docker compose config --format json | jq -r --arg app "$APP" '.services[$app].build.target // empty')
         fi
@@ -195,43 +283,13 @@ jobs:
           exit 1
         fi
 
+        # mode=max exports intermediate stages too, where the bundler and yarn layers live
         docker buildx build --file "$DOCKERFILE" --target "$TARGET" \
           --tag "$CI_IMAGE" --push \
-          $CACHE_ARGS $SECRET_ARGS .
-
-    - name: Build the production image
-      env:
-        CACHE_REF: ${{ inputs.cache_ref }}
-        CACHE_PUSH: ${{ inputs.cache_push }}
-        PUSH: ${{ inputs.push_to_docker_hub }}
-        DOCKERFILE: ${{ inputs.dockerfile }}
-        TARGET: ${{ inputs.production_target }}
-      run: |
-        # Shares all build stages with the test image, so this mostly comes from
-        # the builder's local cache. It is built even when it is not pushed, to
-        # make sure it builds, and to include its stages in the exported cache.
-        SECRET_ARGS=""
-        if [ -n "$SSH_AUTH_SOCK" ]; then
-          SECRET_ARGS="--ssh default"
-        fi
-        if [ -n "$SIDEKIQ_ENTERPRISE_CREDENTIALS" ]; then
-          SECRET_ARGS="$SECRET_ARGS --secret id=sidekiq_enterprise,env=SIDEKIQ_ENTERPRISE_CREDENTIALS"
-        fi
-        CACHE_ARGS=""
-        if [ -n "$CACHE_REF" ]; then
-          CACHE_ARGS="--cache-from type=registry,ref=${CACHE_REF}"
-          if [ "$CACHE_PUSH" = "true" ]; then
-            # mode=max exports intermediate stages too, where the bundler and yarn layers live
-            CACHE_ARGS="$CACHE_ARGS --cache-to type=registry,ref=${CACHE_REF},mode=max"
-          fi
-        fi
-        OUTPUT_ARGS=""
-        if [ "$PUSH" = "true" ]; then
-          OUTPUT_ARGS="--tag ${MAKANDRA_REGISTRY}/${APP}:${TAG} --push"
-        fi
-
-        docker buildx build --file "$DOCKERFILE" --target "$TARGET" \
-          $OUTPUT_ARGS $CACHE_ARGS $SECRET_ARGS .
+          --cache-from "type=registry,ref=${CACHE}:test-${BRANCH}" \
+          --cache-from "type=registry,ref=${CACHE}:test-${DEFAULT_BRANCH}" \
+          --cache-to "type=registry,ref=${CACHE}:test-${BRANCH},mode=max" \
+          $BASE_CONTEXTS $SECRET_ARGS .
 
     - name: Delete old test images from GHCR
       # Cleanup must never fail the build
@@ -241,6 +299,130 @@ jobs:
         package-name: ${{ steps.names.outputs.ci_package }}
         package-type: container
         min-versions-to-keep: ${{ inputs.ci_image_versions_to_keep }}
+
+    - name: Delete old build caches from GHCR
+      # The default branch writes its cache on every push, so it is always among the newest
+      continue-on-error: true
+      uses: actions/delete-package-versions@v5
+      with:
+        package-name: ${{ steps.names.outputs.cache_package }}
+        package-type: container
+        min-versions-to-keep: ${{ inputs.cache_versions_to_keep }}
+
+  production:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      SIDEKIQ_ENTERPRISE_CREDENTIALS: ${{ secrets.sidekiq_enterprise_credentials }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Registry logins
+      env:
+        MAKANDRA_REGISTRY_USER: ${{ secrets.makandra_registry_user }}
+        MAKANDRA_REGISTRY_PASS: ${{ secrets.makandra_registry_pass }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        docker login "$MAKANDRA_REGISTRY" -u "$MAKANDRA_REGISTRY_USER" --password-stdin <<< "$MAKANDRA_REGISTRY_PASS"
+        docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN"
+
+    - name: Start ssh-agent for private gems
+      env:
+        PRIVATE_REPO_PRIVATE_KEY: ${{ secrets.private_repo_private_key }}
+      run: |
+        if [ -z "$PRIVATE_REPO_PRIVATE_KEY" ]; then
+          echo "no private_repo_private_key secret, building without ssh-agent"
+          exit 0
+        fi
+        eval "$(ssh-agent -s)"
+        ssh-add - <<< "$PRIVATE_REPO_PRIVATE_KEY"
+        echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+        echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
+    - name: Set up buildx
+      run: |
+        docker buildx create --name ci-builder --driver docker-container --use
+        docker buildx inspect --bootstrap
+
+    - name: Build the production image
+      env:
+        CACHE: ${{ needs.build.outputs.cache }}
+        BRANCH: ${{ needs.build.outputs.branch }}
+        DEFAULT_BRANCH: ${{ needs.build.outputs.default_branch }}
+        BASE_CONTEXTS: ${{ needs.build.outputs.base_contexts }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        TARGET: ${{ inputs.production_target }}
+      run: |
+        SECRET_ARGS=""
+        if [ -n "$SSH_AUTH_SOCK" ]; then
+          SECRET_ARGS="--ssh default"
+        fi
+        if [ -n "$SIDEKIQ_ENTERPRISE_CREDENTIALS" ]; then
+          SECRET_ARGS="$SECRET_ARGS --secret id=sidekiq_enterprise,env=SIDEKIQ_ENTERPRISE_CREDENTIALS"
+        fi
+
+        # Shares the build stages with the test image, so these come from the
+        # cache the build job just wrote. --load instead of --push: it is only
+        # pushed once it passed the smoke test.
+        docker buildx build --file "$DOCKERFILE" --target "$TARGET" \
+          --tag "${MAKANDRA_REGISTRY}/${APP}:${TAG}" --load \
+          --cache-from "type=registry,ref=${CACHE}:production-${BRANCH}" \
+          --cache-from "type=registry,ref=${CACHE}:production-${DEFAULT_BRANCH}" \
+          --cache-from "type=registry,ref=${CACHE}:test-${BRANCH}" \
+          --cache-from "type=registry,ref=${CACHE}:test-${DEFAULT_BRANCH}" \
+          --cache-to "type=registry,ref=${CACHE}:production-${BRANCH},mode=max" \
+          $BASE_CONTEXTS $SECRET_ARGS .
+
+    - name: Smoke test
+      if: inputs.smoke_test_cmd != ''
+      env:
+        SMOKE_TEST_CMD: ${{ inputs.smoke_test_cmd }}
+        SMOKE_TEST_URL: ${{ inputs.smoke_test_url }}
+      run: |
+        # Starts the production image as the app service of the compose file, so
+        # it gets the database and environment the tests get, but in production mode
+        image=$(docker compose config --format json | jq -r --arg app "$APP" '.services[$app].image')
+        docker tag "${MAKANDRA_REGISTRY}/${APP}:${TAG}" "$image"
+        echo "::group::>>> Start services"
+        docker compose run -d --name smoke -e RAILS_ENV=production "$APP" $SMOKE_TEST_CMD
+        echo "::endgroup::"
+
+        tries=90
+        until docker exec smoke curl -fsS "$SMOKE_TEST_URL"; do
+          tries=$(( tries - 1 ))
+          if [ "$(docker inspect --format '{{.State.Running}}' smoke)" != "true" ]; then
+            echo "::error title=Smoke test failed::the production image exited while starting"
+            exit 1
+          fi
+          if [[ $tries -lt 0 ]]; then
+            echo "::error title=Smoke test failed::${SMOKE_TEST_URL} did not answer successfully"
+            exit 1
+          fi
+          sleep 2
+        done
+        echo
+        echo "${SMOKE_TEST_URL} answered successfully"
+
+    - name: Dump container logs on failure
+      if: failure()
+      run: |
+        docker logs --tail 300 smoke || true
+        docker compose logs --no-color --tail 300
+
+    - name: Push the production image
+      if: inputs.push_to_docker_hub
+      run: docker push --quiet "${MAKANDRA_REGISTRY}/${APP}:${TAG}"
+
+    - name: Stop containers
+      if: always()
+      run: |
+        docker rm -f smoke || true
+        docker compose down
 
   checks:
     needs: build
@@ -256,6 +438,9 @@ jobs:
       packages: read
     env: &run_env
       CI_IMAGE: ${{ needs.build.outputs.ci_image }}
+      # true unless the entry says "services": false
+      SERVICES: ${{ toJSON(matrix.services) != 'false' }}
+      SERVICES_JSON: ${{ toJSON(matrix.services) }}
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       # See https://github.com/actions/runner/issues/409 - there is still no conditional operator
       ALGOLIA_SUPPLIERS_INDEX_NAME: ${{ matrix.algolia_index && format('ci_{0}_{1}_{2}_supps', inputs.tag, github.run_number, matrix.algolia_index) || '' }}
@@ -280,17 +465,43 @@ jobs:
         image=$(docker compose config --format json | jq -r --arg app "$APP" '.services[$app].image')
         docker tag "$CI_IMAGE" "$image"
         echo "::endgroup::"
-        echo "::group::>>> Pull dependencies"
-        docker compose pull --ignore-buildable --quiet
-        echo "::endgroup::"
+        if [ "$SERVICES" = "true" ]; then
+          echo "EXEC=docker compose exec -T" >> "$GITHUB_ENV"
+          # The services the app runs with: those of the entry, or all of the compose file
+          if [ "$SERVICES_JSON" = "null" ]; then
+            dependencies=$(docker compose config --services | grep -vx "$APP" | xargs)
+          else
+            dependencies=$(jq -r '.[]' <<< "$SERVICES_JSON" | xargs)
+          fi
+          echo "DEPENDENCIES=${dependencies}" >> "$GITHUB_ENV"
+          echo "::group::>>> Pull dependencies: ${dependencies}"
+          if [ -n "$dependencies" ]; then
+            docker compose pull --ignore-buildable --quiet $dependencies
+          fi
+          echo "::endgroup::"
+        else
+          # A container of its own, with the app's environment from the compose
+          # file, but without the services it depends on. The entrypoint of the
+          # image would take cmd as one of its own commands, env just runs it.
+          echo "EXEC=docker compose run --rm --no-deps -T --entrypoint /usr/bin/env" >> "$GITHUB_ENV"
+        fi
 
     - name: Start services
-      run: docker compose up -d --no-build
+      if: env.SERVICES == 'true'
+      run: |
+        # The dependencies first, waiting until they are healthy, as depends_on
+        # would. --no-deps then keeps the app from starting the ones left out.
+        if [ -n "$DEPENDENCIES" ]; then
+          docker compose up -d --wait $DEPENDENCIES
+        fi
+        docker compose up -d --no-build --no-deps "$APP"
 
     - name: Prepare database
+      if: env.SERVICES == 'true'
       run: docker compose exec -T "$APP" bin/rails db:drop db:create db:test:prepare
 
     - name: Wait while starting
+      if: env.SERVICES == 'true'
       run: |
         sleep 5
         tries=20
@@ -308,8 +519,9 @@ jobs:
         docker compose ps
 
     - name: Check services
+      if: env.SERVICES == 'true'
       run: |
-        expected=$(docker compose config --services | wc -l)
+        expected=$(( $(wc -w <<< "$DEPENDENCIES") + 1 ))
         running=$(docker compose ps --services --filter "status=running" | wc -l)
         if [ "$running" != "$expected" ]; then
           echo "::error title=Starting failed::Only ${running} of ${expected} services are running"
@@ -323,20 +535,20 @@ jobs:
 
     - name: Create Algolia index
       if: matrix.algolia_index
-      run: docker compose exec -T "$APP" bundle exec rake algolia:create:all
+      run: $EXEC "$APP" bundle exec rake algolia:create:all
 
     # cmd is pasted into the script, so the runner's shell handles its quotes and
     # $(...), e.g. bash -c "yarn install && yarn test"
     - name: Run command
       if: ${{ !matrix.code_coverage }}
-      run: docker compose exec -T "$APP" ${{ matrix.cmd }}
+      run: $EXEC "$APP" ${{ matrix.cmd }}
 
     - name: Run command with code coverage
       if: matrix.code_coverage
       run: |
         # Could we download that file, review it, and then use that - approved by us - local copy?
         ci_env=`bash <(curl -s https://codecov.io/env)`
-        docker compose exec -T -e CI=true -e CODECOVERAGE=true $ci_env "$APP" ${{ matrix.cmd }}
+        $EXEC -e CI=true -e CODECOVERAGE=true $ci_env "$APP" ${{ matrix.cmd }}
 
     - name: Upload artifacts
       # uploads only if run failed
@@ -348,7 +560,7 @@ jobs:
 
     - name: Remove Algolia index (flaky!)
       if: matrix.algolia_index && always()
-      run: docker compose exec -T "$APP" bundle exec rake algolia:remove:all || true
+      run: $EXEC "$APP" bundle exec rake algolia:remove:all || true
 
     - name: Dump container logs on failure
       if: failure()
@@ -359,6 +571,19 @@ jobs:
     - name: Stop containers
       if: always()
       run: docker compose down
+
+  independent:
+    needs: build
+    if: inputs.independent != '[]'
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.independent) }}
+    runs-on: ubuntu-latest
+    permissions: *run_permissions
+    env: *run_env
+    steps: *run_steps
 
   tests:
     needs: [build, checks]
