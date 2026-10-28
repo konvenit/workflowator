@@ -1,0 +1,375 @@
+# The whole CI of an app in one reusable workflow: it builds the images once and
+# then runs every check and test as a matrix job in the test image.
+#
+#   ci:
+#     uses: konvenit/workflowator/.github/workflows/ci.yaml@<tag>
+#     permissions:
+#       contents: read
+#       packages: write
+#     with:
+#       application-name: katalysator
+#       checks: |
+#         [{"name": "rubocop", "cmd": "bin/rubocop -F -f s"}]
+#       tests: |
+#         [{"name": "models", "cmd": "bin/rspec spec/models"},
+#          {"name": "integrations", "cmd": "bin/rspec spec/integrations", "artifacts_path": "/tmp/screenshots"}]
+#     secrets: inherit
+#
+# Images, both built from the app's Dockerfile:
+# - the test target (the app's build target in the compose file) goes to ghcr.io/<owner>/<app>-ci:<tag>. Only CI uses it, and
+#   pulls from GHCR are fast on GitHub's runners.
+# - the production target goes to the makandra registry as <app>:<tag>, which is
+#   what staging deploys.
+#
+# Each matrix entry takes:
+#   name            job name
+#   cmd             command run with docker compose exec in the app container
+#   artifacts_path  uploaded when the job fails, e.g. /tmp/screenshots
+#   code_coverage   true to report to codecov
+#   algolia_index   creates the algolia indexes before and removes them after the run
+#
+# This file must not reference workflowator itself (actions or workflows by tag),
+# so that releasing a new tag needs no edits here.
+name: CI
+
+on:
+  workflow_call:
+    inputs:
+      application-name:
+        required: true
+        type: string
+      tag:
+        required: false
+        type: string
+        default: ${{ github.event.pull_request.head.sha || github.sha }}
+      checks:
+        description: JSON list of matrix entries that run first; tests only start when all of them pass
+        required: false
+        type: string
+        default: '[]'
+      tests:
+        description: JSON list of matrix entries
+        required: false
+        type: string
+        default: '[]'
+      dockerfile:
+        required: false
+        type: string
+        default: Dockerfile
+      test_target:
+        description: Dockerfile target of the test image, by default the build target of the app in the compose file
+        required: false
+        type: string
+        default: ''
+      production_target:
+        required: false
+        type: string
+        default: production
+      compose_file:
+        required: false
+        type: string
+        default: docker-compose.test.yml
+      push_to_docker_hub:
+        description: Push the production image to the makandra registry
+        required: false
+        default: true
+        type: boolean
+      cache_ref:
+        description: Registry ref for the BuildKit cache backend. Empty disables build caching.
+        required: false
+        default: ''
+        type: string
+      cache_push:
+        description: Whether to export the build cache (cache_to). Set false on PR builds to read the cache without overwriting it.
+        required: false
+        default: true
+        type: boolean
+      ci_image_versions_to_keep:
+        description: How many test images to keep on GHCR, older ones are deleted
+        required: false
+        default: 30
+        type: number
+
+    secrets:
+      makandra_registry_user:
+        required: true
+      makandra_registry_pass:
+        required: true
+      private_repo_private_key:
+        description: Private SSH key for git@github.com gems, passed into the build with RUN --mount=type=ssh
+        required: false
+      sidekiq_enterprise_credentials:
+        description: user:password for enterprise.contribsys.com, passed into the build with RUN --mount=type=secret,id=sidekiq_enterprise
+        required: false
+      CODECOV_TOKEN:
+        required: false
+      ALGOLIA_APPLICATION:
+        required: false
+      ALGOLIA_SEARCH_API_KEY:
+        required: false
+      ALGOLIA_WRITE_API_KEY:
+        required: false
+
+env:
+  APP: ${{ inputs.application-name }}
+  TAG: ${{ inputs.tag }}
+  COMPOSE_FILE: ${{ inputs.compose_file }}
+  MAKANDRA_REGISTRY: registry.stage.miceportal.makandra.cloud
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ci_image: ${{ steps.names.outputs.ci_image }}
+    env:
+      SIDEKIQ_ENTERPRISE_CREDENTIALS: ${{ secrets.sidekiq_enterprise_credentials }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Image names
+      id: names
+      run: |
+        # GHCR only accepts lower case names
+        owner="${GITHUB_REPOSITORY_OWNER,,}"
+        echo "ci_package=${APP}-ci" >> "$GITHUB_OUTPUT"
+        echo "ci_image=ghcr.io/${owner}/${APP}-ci:${TAG}" >> "$GITHUB_OUTPUT"
+
+    - name: Registry logins
+      env:
+        MAKANDRA_REGISTRY_USER: ${{ secrets.makandra_registry_user }}
+        MAKANDRA_REGISTRY_PASS: ${{ secrets.makandra_registry_pass }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        docker login "$MAKANDRA_REGISTRY" -u "$MAKANDRA_REGISTRY_USER" --password-stdin <<< "$MAKANDRA_REGISTRY_PASS"
+        docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN"
+
+    - name: Start ssh-agent for private gems
+      env:
+        PRIVATE_REPO_PRIVATE_KEY: ${{ secrets.private_repo_private_key }}
+      run: |
+        if [ -z "$PRIVATE_REPO_PRIVATE_KEY" ]; then
+          echo "no private_repo_private_key secret, building without ssh-agent"
+          exit 0
+        fi
+        eval "$(ssh-agent -s)"
+        ssh-add - <<< "$PRIVATE_REPO_PRIVATE_KEY"
+        echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+        echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
+    - name: Set up buildx
+      run: |
+        # The docker-container driver is required for registry cache export
+        docker buildx create --name ci-builder --driver docker-container --use
+        docker buildx inspect --bootstrap
+
+    - name: Build and push the test image
+      env:
+        CI_IMAGE: ${{ steps.names.outputs.ci_image }}
+        CACHE_REF: ${{ inputs.cache_ref }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        TARGET: ${{ inputs.test_target }}
+      run: |
+        # Credentials for private gems. They are only mounted into the RUN steps
+        # that ask for them and never end up in a layer.
+        SECRET_ARGS=""
+        if [ -n "$SSH_AUTH_SOCK" ]; then
+          SECRET_ARGS="--ssh default"
+        fi
+        if [ -n "$SIDEKIQ_ENTERPRISE_CREDENTIALS" ]; then
+          SECRET_ARGS="$SECRET_ARGS --secret id=sidekiq_enterprise,env=SIDEKIQ_ENTERPRISE_CREDENTIALS"
+        fi
+        CACHE_ARGS=""
+        if [ -n "$CACHE_REF" ]; then
+          CACHE_ARGS="--cache-from type=registry,ref=${CACHE_REF}"
+        fi
+        if [ -z "$TARGET" ]; then
+          TARGET=$(docker compose config --format json | jq -r --arg app "$APP" '.services[$app].build.target // empty')
+        fi
+        if [ -z "$TARGET" ]; then
+          echo "::error title=No test target::set test_target, or build.target of ${APP} in ${COMPOSE_FILE}"
+          exit 1
+        fi
+
+        docker buildx build --file "$DOCKERFILE" --target "$TARGET" \
+          --tag "$CI_IMAGE" --push \
+          $CACHE_ARGS $SECRET_ARGS .
+
+    - name: Build the production image
+      env:
+        CACHE_REF: ${{ inputs.cache_ref }}
+        CACHE_PUSH: ${{ inputs.cache_push }}
+        PUSH: ${{ inputs.push_to_docker_hub }}
+        DOCKERFILE: ${{ inputs.dockerfile }}
+        TARGET: ${{ inputs.production_target }}
+      run: |
+        # Shares all build stages with the test image, so this mostly comes from
+        # the builder's local cache. It is built even when it is not pushed, to
+        # make sure it builds, and to include its stages in the exported cache.
+        SECRET_ARGS=""
+        if [ -n "$SSH_AUTH_SOCK" ]; then
+          SECRET_ARGS="--ssh default"
+        fi
+        if [ -n "$SIDEKIQ_ENTERPRISE_CREDENTIALS" ]; then
+          SECRET_ARGS="$SECRET_ARGS --secret id=sidekiq_enterprise,env=SIDEKIQ_ENTERPRISE_CREDENTIALS"
+        fi
+        CACHE_ARGS=""
+        if [ -n "$CACHE_REF" ]; then
+          CACHE_ARGS="--cache-from type=registry,ref=${CACHE_REF}"
+          if [ "$CACHE_PUSH" = "true" ]; then
+            # mode=max exports intermediate stages too, where the bundler and yarn layers live
+            CACHE_ARGS="$CACHE_ARGS --cache-to type=registry,ref=${CACHE_REF},mode=max"
+          fi
+        fi
+        OUTPUT_ARGS=""
+        if [ "$PUSH" = "true" ]; then
+          OUTPUT_ARGS="--tag ${MAKANDRA_REGISTRY}/${APP}:${TAG} --push"
+        fi
+
+        docker buildx build --file "$DOCKERFILE" --target "$TARGET" \
+          $OUTPUT_ARGS $CACHE_ARGS $SECRET_ARGS .
+
+    - name: Delete old test images from GHCR
+      # Cleanup must never fail the build
+      continue-on-error: true
+      uses: actions/delete-package-versions@v5
+      with:
+        package-name: ${{ steps.names.outputs.ci_package }}
+        package-type: container
+        min-versions-to-keep: ${{ inputs.ci_image_versions_to_keep }}
+
+  checks:
+    needs: build
+    if: inputs.checks != '[]'
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.checks) }}
+    runs-on: ubuntu-latest
+    permissions: &run_permissions
+      contents: read
+      packages: read
+    env: &run_env
+      CI_IMAGE: ${{ needs.build.outputs.ci_image }}
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      # See https://github.com/actions/runner/issues/409 - there is still no conditional operator
+      ALGOLIA_SUPPLIERS_INDEX_NAME: ${{ matrix.algolia_index && format('ci_{0}_{1}_{2}_supps', inputs.tag, github.run_number, matrix.algolia_index) || '' }}
+      ALGOLIA_MOMENTS_INDEX_NAME:   ${{ matrix.algolia_index && format('ci_{0}_{1}_{2}_momes', inputs.tag, github.run_number, matrix.algolia_index) || '' }}
+      ALGOLIA_APPLICATION:    ${{ matrix.algolia_index && secrets.ALGOLIA_APPLICATION    || '' }}
+      ALGOLIA_SEARCH_API_KEY: ${{ matrix.algolia_index && secrets.ALGOLIA_SEARCH_API_KEY || '' }}
+      ALGOLIA_WRITE_API_KEY:  ${{ matrix.algolia_index && secrets.ALGOLIA_WRITE_API_KEY  || '' }}
+
+    steps: &run_steps
+    - name: Checkout
+      uses: actions/checkout@v7
+
+    - name: Pull images
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        echo "::group::>>> Pull the test image"
+        docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN"
+        docker pull --quiet "$CI_IMAGE"
+        # The compose file names the app's image after the makandra registry.
+        # Giving the test image that name lets compose use it without building.
+        image=$(docker compose config --format json | jq -r --arg app "$APP" '.services[$app].image')
+        docker tag "$CI_IMAGE" "$image"
+        echo "::endgroup::"
+        echo "::group::>>> Pull dependencies"
+        docker compose pull --ignore-buildable --quiet
+        echo "::endgroup::"
+
+    - name: Start services
+      run: docker compose up -d --no-build
+
+    - name: Prepare database
+      run: docker compose exec -T "$APP" bin/rails db:drop db:create db:test:prepare
+
+    - name: Wait while starting
+      run: |
+        sleep 5
+        tries=20
+        while docker compose ps | grep -q '(health: starting)'; do
+          tries=$(( tries - 1 ))
+          if [[ $tries -lt 0 ]]; then
+            echo "::error title=Starting timed out::Some services are still starting. Too many retries."
+            docker compose ps
+            exit 1
+          fi
+          echo " -- Still waiting ($tries more) ..."
+          docker compose ps | grep '(health: starting)'
+          sleep 2
+        done
+        docker compose ps
+
+    - name: Check services
+      run: |
+        expected=$(docker compose config --services | wc -l)
+        running=$(docker compose ps --services --filter "status=running" | wc -l)
+        if [ "$running" != "$expected" ]; then
+          echo "::error title=Starting failed::Only ${running} of ${expected} services are running"
+          exit 1
+        fi
+        status=$(docker inspect --format "{{.State.Health.Status}}" $(docker compose ps -q "$APP"))
+        if [ "$status" != "healthy" ]; then
+          echo "::error title=Not healthy::${APP} is not healthy: ${status}"
+          exit 1
+        fi
+
+    - name: Create Algolia index
+      if: matrix.algolia_index
+      run: docker compose exec -T "$APP" bundle exec rake algolia:create:all
+
+    # cmd is pasted into the script, so the runner's shell handles its quotes and
+    # $(...), e.g. bash -c "yarn install && yarn test"
+    - name: Run command
+      if: ${{ !matrix.code_coverage }}
+      run: docker compose exec -T "$APP" ${{ matrix.cmd }}
+
+    - name: Run command with code coverage
+      if: matrix.code_coverage
+      run: |
+        # Could we download that file, review it, and then use that - approved by us - local copy?
+        ci_env=`bash <(curl -s https://codecov.io/env)`
+        docker compose exec -T -e CI=true -e CODECOVERAGE=true $ci_env "$APP" ${{ matrix.cmd }}
+
+    - name: Upload artifacts
+      # uploads only if run failed
+      if: failure() && matrix.artifacts_path
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ matrix.name }}
+        path: ${{ matrix.artifacts_path }}
+
+    - name: Remove Algolia index (flaky!)
+      if: matrix.algolia_index && always()
+      run: docker compose exec -T "$APP" bundle exec rake algolia:remove:all || true
+
+    - name: Dump container logs on failure
+      if: failure()
+      run: |
+        docker compose ps -a
+        docker compose logs --no-color --tail 300
+
+    - name: Stop containers
+      if: always()
+      run: docker compose down
+
+  tests:
+    needs: [build, checks]
+    # Also runs when there are no checks and the checks job was skipped
+    if: ${{ !cancelled() && inputs.tests != '[]' && needs.build.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.checks.result) }}
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.tests) }}
+    runs-on: ubuntu-latest
+    permissions: *run_permissions
+    env: *run_env
+    steps: *run_steps
