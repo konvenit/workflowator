@@ -1,6 +1,6 @@
 # The whole CI of an app in one reusable workflow: it builds the test image once
 # and then runs every check and test as a matrix job in it. The production image
-# is built, smoke tested and pushed alongside, off the critical path.
+# is built and smoke tested alongside, off the critical path.
 #
 #   ci:
 #     uses: konvenit/workflowator/.github/workflows/ci.yaml@<tag>
@@ -21,8 +21,9 @@
 # Images, all built from the app's Dockerfile:
 # - the test target (the app's build target in the compose file) goes to ghcr.io/<owner>/<app>-ci:<tag>. Only CI uses it, and
 #   pulls from GHCR are fast on GitHub's runners.
-# - the production target goes to the makandra registry as <app>:<tag>, which is
-#   what staging deploys. It is only pushed after it passed the smoke test.
+# - the production target is only smoke tested, nothing is pushed. The images
+#   staging and production deploy are built and smoke tested by Jenkins
+#   (dockerator_branch_<app>).
 #
 # Caches, all on GHCR because pulls from the makandra registry are slow on GitHub's runners:
 # - ghcr.io/<owner>/<app>-ci-base: copies of the Dockerfile's base images from the
@@ -79,10 +80,6 @@ on:
         required: false
         type: string
         default: ''
-      production_target:
-        required: false
-        type: string
-        default: production
       compose_file:
         required: false
         type: string
@@ -91,31 +88,6 @@ on:
         description: Command the app container is started with for the entries that start services. It must prepare the app and then end in bash, which keeps the container running for cmd. The default has the image's entrypoint copy the test config files, without starting the server.
         required: false
         default: bash test
-        type: string
-      push_to_docker_hub:
-        description: Push the production image to the makandra registry
-        required: false
-        default: true
-        type: boolean
-      smoke_test:
-        description: Start the production image and request smoke_test_url before pushing it
-        required: false
-        default: true
-        type: boolean
-      smoke_test_cmd:
-        description: Command the production image is started with in the app service of the compose file
-        required: false
-        default: server production
-        type: string
-      smoke_test_prepare_cmd:
-        description: Command the production image is run with once before the smoke test, to create and load the database. Empty skips it.
-        required: false
-        default: prepare production
-        type: string
-      smoke_test_url:
-        description: Requested inside the started production container until it answers successfully
-        required: false
-        default: http://localhost:3000/ready
         type: string
       skip_tests:
         description: Only build the images, without running the checks, independent jobs and tests, e.g. for draft PRs
@@ -341,173 +313,6 @@ jobs:
         keep-n-tagged: ${{ inputs.cache_versions_to_keep }}
         # Every push replaces its branch's cache, which leaves the previous one untagged
         delete-untagged: true
-
-  production:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    env:
-      SIDEKIQ_ENTERPRISE_CREDENTIALS: ${{ secrets.sidekiq_enterprise_credentials }}
-
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v7
-
-    - name: Registry logins
-      env:
-        MAKANDRA_REGISTRY_USER: ${{ secrets.makandra_registry_user }}
-        MAKANDRA_REGISTRY_PASS: ${{ secrets.makandra_registry_pass }}
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        docker login "$MAKANDRA_REGISTRY" -u "$MAKANDRA_REGISTRY_USER" --password-stdin <<< "$MAKANDRA_REGISTRY_PASS"
-        docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN"
-
-    - name: Start ssh-agent for private gems
-      env:
-        PRIVATE_REPO_PRIVATE_KEY: ${{ secrets.private_repo_private_key }}
-      run: |
-        if [ -z "$PRIVATE_REPO_PRIVATE_KEY" ]; then
-          echo "no private_repo_private_key secret, building without ssh-agent"
-          exit 0
-        fi
-        eval "$(ssh-agent -s)"
-        ssh-add - <<< "$PRIVATE_REPO_PRIVATE_KEY"
-        echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
-        echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
-
-    - name: Set up buildx
-      run: |
-        docker buildx create --name ci-builder --driver docker-container --use
-        docker buildx inspect --bootstrap
-
-    - name: Build info
-      id: build_info
-      env:
-        GH_TOKEN: ${{ github.token }}
-        # The pushed commit, not the merge commit a pull request checks out
-        COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-        BRANCH: ${{ github.head_ref || github.ref_name }}
-        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        PULL_REQUEST: ${{ toJSON(github.event.pull_request) }}
-      run: |
-        if ! commit=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${COMMIT}"); then
-          echo "::warning title=No build info::could not fetch commit ${COMMIT}"
-          exit 0
-        fi
-        pr=$(jq -c '. // {}' <<< "$PULL_REQUEST")
-        info=$(jq -c -n \
-          --argjson commit "$commit" \
-          --argjson pr "$pr" \
-          --arg repo "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
-          --arg branch "$BRANCH" \
-          --arg default_branch "$DEFAULT_BRANCH" \
-          --arg built_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          --arg ci_run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" '
-          # The Jira ticket from the branch, e.g. mp54204_slim_down, else from the pull request title
-          def ticket: [$branch, ($pr.title // "")]
-            | map(capture("(^|[^a-z])mp[-_ ]?(?<n>[0-9]+)"; "i").n) | first // empty | "MP-\(.)";
-          {
-            commit_url:               "\($repo)/commit/\($commit.sha)",
-            tree_url:                 "\($repo)/tree/\($commit.sha)",
-            diff_master_url:          "\($repo)/compare/\($commit.sha)...\($default_branch)",
-            last_commit:              $commit.sha[0:7],
-            last_changed_date:        $commit.commit.committer.date,
-            last_changed_author:      "<\($commit.commit.author.email)>",
-            revision:                 ($commit.commit.message | split("\n")[0]),
-            branch:                   $branch,
-            ticket:                   (ticket // ""),
-            ticket_url:               (ticket | "https://miceportal.atlassian.net/browse/\(.)") // "",
-            last_changed_author_name: $commit.commit.author.name,
-            pr_number:                $pr.number,
-            pr_title:                 $pr.title,
-            pr_url:                   $pr.html_url,
-            built_at:                 $built_at,
-            ci_run_url:               $ci_run_url
-          }')
-        echo "$info"
-        echo "json=${info}" >> "$GITHUB_OUTPUT"
-
-    - name: Build the production image
-      env:
-        BUILD_INFO: ${{ steps.build_info.outputs.json }}
-        CACHE: ${{ needs.build.outputs.cache }}
-        BRANCH: ${{ needs.build.outputs.branch }}
-        DEFAULT_BRANCH: ${{ needs.build.outputs.default_branch }}
-        BASE_CONTEXTS: ${{ needs.build.outputs.base_contexts }}
-        DOCKERFILE: ${{ inputs.dockerfile }}
-        TARGET: ${{ inputs.production_target }}
-      run: |
-        SECRET_ARGS=""
-        if [ -n "$SSH_AUTH_SOCK" ]; then
-          SECRET_ARGS="--ssh default"
-        fi
-        if [ -n "$SIDEKIQ_ENTERPRISE_CREDENTIALS" ]; then
-          SECRET_ARGS="$SECRET_ARGS --secret id=sidekiq_enterprise,env=SIDEKIQ_ENTERPRISE_CREDENTIALS"
-        fi
-
-        docker buildx build --file "$DOCKERFILE" --target "$TARGET" \
-          --tag "${MAKANDRA_REGISTRY}/${APP}:${TAG}" --load \
-          --build-arg "BUILD_INFO=${BUILD_INFO}" \
-          --cache-from "type=registry,ref=${CACHE}:production-${BRANCH}" \
-          --cache-from "type=registry,ref=${CACHE}:production-${DEFAULT_BRANCH}" \
-          --cache-from "type=registry,ref=${CACHE}:test-${BRANCH}" \
-          --cache-from "type=registry,ref=${CACHE}:test-${DEFAULT_BRANCH}" \
-          --cache-to "type=registry,ref=${CACHE}:production-${BRANCH},mode=max" \
-          $BASE_CONTEXTS $SECRET_ARGS .
-
-    - name: Smoke test
-      if: inputs.smoke_test
-      env:
-        SMOKE_TEST_CMD: ${{ inputs.smoke_test_cmd }}
-        SMOKE_TEST_PREPARE_CMD: ${{ inputs.smoke_test_prepare_cmd }}
-        SMOKE_TEST_URL: ${{ inputs.smoke_test_url }}
-      run: |
-        image=$(docker compose config --format json | jq -r --arg app "$APP" '.services[$app].image')
-        docker tag "${MAKANDRA_REGISTRY}/${APP}:${TAG}" "$image"
-        if [ -n "$SMOKE_TEST_PREPARE_CMD" ]; then
-          # The production database does not exist yet. Creating it with the
-          # production image, as the deploy does, also tests its migrations.
-          echo "::group::>>> Prepare the database"
-          docker compose run --rm -e RAILS_ENV=production "$APP" $SMOKE_TEST_PREPARE_CMD
-          echo "::endgroup::"
-        fi
-        echo "::group::>>> Start services"
-        docker compose run -d --name smoke -e RAILS_ENV=production "$APP" $SMOKE_TEST_CMD
-        echo "::endgroup::"
-
-        tries=90
-        until docker exec smoke curl -fsS "$SMOKE_TEST_URL"; do
-          tries=$(( tries - 1 ))
-          if [ "$(docker inspect --format '{{.State.Running}}' smoke)" != "true" ]; then
-            echo "::error title=Smoke test failed::the production image exited while starting"
-            exit 1
-          fi
-          if [[ $tries -lt 0 ]]; then
-            echo "::error title=Smoke test failed::${SMOKE_TEST_URL} did not answer successfully"
-            exit 1
-          fi
-          sleep 2
-        done
-        echo
-        echo "${SMOKE_TEST_URL} answered successfully"
-
-    - name: Dump container logs on failure
-      if: failure()
-      run: |
-        docker logs --tail 300 smoke || true
-        docker compose logs --no-color --tail 300
-
-    - name: Push the production image
-      if: inputs.push_to_docker_hub
-      run: docker push --quiet "${MAKANDRA_REGISTRY}/${APP}:${TAG}"
-
-    - name: Stop containers
-      if: always()
-      run: |
-        docker rm -f smoke || true
-        docker compose down
 
   checks:
     needs: build
