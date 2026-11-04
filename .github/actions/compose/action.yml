@@ -16,6 +16,12 @@ inputs:
     description: Whether to export the build cache (cache_to). Set false on PR builds to read cache without writing it.
     required: false
     default: 'true'
+  build-secrets:
+    description: |
+      Whether to pass the credentials the calling workflow set up (SSH_AUTH_SOCK and
+      SIDEKIQ_ENTERPRISE_CREDENTIALS) into the build of the app image.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -27,12 +33,13 @@ runs:
       echo "::endgroup::"
 
   - name: Set up buildx builder
-    if: ${{ inputs.cache-ref != '' }}
+    if: ${{ inputs.cache-ref != '' || inputs.build-secrets == 'true' }}
     shell: bash
     run: |
       echo "::group::>>> Set up buildx"
       # The docker-container driver is required for registry cache export;
-      # the default "docker" driver does not support --cache-to.
+      # the default "docker" driver does not support --cache-to. Builds with
+      # credentials use it too, so they take the same path with or without a cache.
       docker buildx inspect ci-builder >/dev/null 2>&1 \
         || docker buildx create --name ci-builder --driver docker-container --use
       docker buildx use ci-builder
@@ -45,55 +52,96 @@ runs:
       CACHE_REF: ${{ inputs.cache-ref }}
       CACHE_PUSH: ${{ inputs.cache-push }}
       APP_NAME: ${{ inputs.application-name }}
+      BUILD_SECRETS: ${{ inputs.build-secrets }}
     run: |
       echo "::group::>>> Build"
-      if [ -z "$CACHE_REF" ]; then
-        # No cache backend configured: plain compose build against the local
-        # image store, matching the previous implicit build inside `up`.
+      if [ -z "$CACHE_REF" ] && [ "$BUILD_SECRETS" != "true" ]; then
+        # No cache backend and no credentials: plain compose build against the
+        # local image store, matching the previous implicit build inside `up`.
         docker compose -f docker-compose.test.yml build
       else
-        # Build with the docker-container driver so the registry cache backend
-        # is available, and --load the result back into the local image store so
-        # the subsequent `docker compose up` finds it.
-        CACHE_ARGS="--cache-from type=registry,ref=${CACHE_REF}"
-        if [ "$CACHE_PUSH" = "true" ]; then
-          # mode=max exports intermediate stages too. This matters here: the
-          # bundler and yarn layers live in the discarded `build` stage, so
-          # mode=min (the default) would export nothing useful.
-          CACHE_ARGS="$CACHE_ARGS --cache-to type=registry,ref=${CACHE_REF},mode=max"
+        # The app is built with buildx, which compose build cannot replace: it needs
+        # the docker-container driver for the registry cache backend, and has no
+        # flag for --secret. --load puts the result back into the local image store
+        # so the subsequent `docker compose up` finds it.
+        CACHE_ARGS=""
+        if [ -n "$CACHE_REF" ]; then
+          CACHE_ARGS="--cache-from type=registry,ref=${CACHE_REF}"
+          if [ "$CACHE_PUSH" = "true" ]; then
+            # mode=max exports intermediate stages too. This matters here: the
+            # bundler and yarn layers live in the discarded `build` stage, so
+            # mode=min (the default) would export nothing useful.
+            CACHE_ARGS="$CACHE_ARGS --cache-to type=registry,ref=${CACHE_REF},mode=max"
+          fi
         fi
 
-        # Resolve context/dockerfile/image from compose, so we honour whatever
-        # the application's compose file declares. Emits three tab-separated
-        # fields on success, or "ERROR<TAB><reason>" for a readable failure.
-        EXTRACT=$(docker compose -f docker-compose.test.yml config --format json | ruby -rjson -e '
+        # Credentials for private gems, set up by the calling workflow. They are only
+        # mounted into the RUN steps that ask for them and never end up in a layer.
+        SECRET_ARGS=""
+        if [ "$BUILD_SECRETS" = "true" ]; then
+          if [ -n "$SSH_AUTH_SOCK" ]; then
+            SECRET_ARGS="--ssh default"
+          fi
+          if [ -n "$SIDEKIQ_ENTERPRISE_CREDENTIALS" ]; then
+            SECRET_ARGS="$SECRET_ARGS --secret id=sidekiq_enterprise,env=SIDEKIQ_ENTERPRISE_CREDENTIALS"
+          fi
+        fi
+
+        CONFIG=$(docker compose -f docker-compose.test.yml config --format json)
+
+        # Resolve context/dockerfile/image/target from compose, so we honour whatever
+        # the application's compose file declares. Emits four tab-separated fields
+        # and then one build arg per line on success, or "ERROR<TAB><reason>" for
+        # a readable failure.
+        EXTRACT=$(printf %s "$CONFIG" | ruby -rjson -e '
           s = (JSON.parse(STDIN.read)["services"] || {})[ENV["APP_NAME"]]
           fail_with = ->(reason) { puts "ERROR\t#{reason}"; exit 0 }
           fail_with.call("no service named %s" % ENV["APP_NAME"]) if s.nil?
-          fail_with.call("service has no build: section, so there is nothing to cache (unset cache-ref)") if s["build"].nil?
+          fail_with.call("service has no build: section, so there is nothing to build with cache-ref or build-secrets") if s["build"].nil?
           fail_with.call("service has no image: key; an explicit image name is required so the built image can be loaded back into the local store") if s["image"].to_s.empty?
-          puts [s["build"]["context"], s["build"]["dockerfile"] || "Dockerfile", s["image"]].join("\t")
+          b = s["build"]
+          puts [b["context"], b["dockerfile"] || "Dockerfile", s["image"], b["target"].to_s].join("\t")
+          # Args without a value (null) are left to the Dockerfile default, as compose does
+          (b["args"] || {}).each { |k, v| puts "#{k}=#{v}" unless v.nil? }
         ')
 
-        if [ "$(printf %s "$EXTRACT" | cut -f1)" = "ERROR" ]; then
+        if [ "$(printf %s "$EXTRACT" | head -n1 | cut -f1)" = "ERROR" ]; then
           echo "::error title=Cannot build ${APP_NAME}::$(printf %s "$EXTRACT" | cut -f2)"
           exit 1
         fi
 
-        CONTEXT=$(printf %s "$EXTRACT" | cut -f1)
-        DOCKERFILE=$(printf %s "$EXTRACT" | cut -f2)
-        IMAGE=$(printf %s "$EXTRACT" | cut -f3)
+        mapfile -t LINES <<< "$EXTRACT"
+        IFS=$'\t' read -r CONTEXT DOCKERFILE IMAGE TARGET <<< "${LINES[0]}"
+        TARGET_ARGS=()
+        if [ -n "$TARGET" ]; then
+          TARGET_ARGS=(--target "$TARGET")
+        fi
+        BUILD_ARGS=()
+        for arg in "${LINES[@]:1}"; do
+          BUILD_ARGS+=(--build-arg "$arg")
+        done
 
         echo " --- building ${IMAGE} from ${CONTEXT}/${DOCKERFILE}"
         docker buildx build \
           --file "${CONTEXT}/${DOCKERFILE}" \
           --tag "${IMAGE}" \
           --load \
+          "${TARGET_ARGS[@]}" \
+          "${BUILD_ARGS[@]}" \
           $CACHE_ARGS \
+          $SECRET_ARGS \
           "${CONTEXT}"
 
-        # Any other services with a build section still build the classic way.
-        docker compose -f docker-compose.test.yml build
+        # Any other services with a build section still build the classic way. The
+        # app is left out: building it again would run without the credentials and
+        # replace the image just loaded.
+        OTHERS=$(printf %s "$CONFIG" | ruby -rjson -e '
+          services = JSON.parse(STDIN.read)["services"] || {}
+          puts services.select { |name, s| s["build"] && name != ENV["APP_NAME"] }.keys
+        ')
+        if [ -n "$OTHERS" ]; then
+          docker compose -f docker-compose.test.yml build $OTHERS
+        fi
       fi
       echo "::endgroup::"
 
