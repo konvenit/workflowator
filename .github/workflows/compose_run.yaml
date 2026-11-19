@@ -97,7 +97,7 @@ jobs:
         fi
 
     - name: Compose up
-      uses: konvenit/workflowator/.github/actions/compose@v24
+      uses: konvenit/workflowator/.github/actions/compose@v25
       with:
         application-name: ${{ inputs.application-name }}
         cache-ref: ${{ inputs.cache_ref }}
