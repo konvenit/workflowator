@@ -324,7 +324,7 @@ jobs:
           $BASE_CONTEXTS $SECRET_ARGS .
 
     - name: Delete old test images from GHCR
-      uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+      uses: dataaxiom/ghcr-cleanup-action@v1.3.0
       with:
         package: ${{ steps.names.outputs.ci_package }}
         keep-n-tagged: ${{ inputs.ci_image_versions_to_keep }}
@@ -334,7 +334,7 @@ jobs:
     - name: Delete old build caches from GHCR
       # Runs even if the image cleanup failed
       if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-      uses: dataaxiom/ghcr-cleanup-action@v1.2.2
+      uses: dataaxiom/ghcr-cleanup-action@v1.3.0
       with:
         package: ${{ steps.names.outputs.cache_package }}
         keep-n-tagged: ${{ inputs.cache_versions_to_keep }}
